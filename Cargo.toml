@@ -1,0 +1,6 @@
+[package]
+name = "scalar"
+version = "0.1.0"
+authors = ["Ricky Boyd <ricky_boyd@hotmail.co.uk>"]
+
+[dependencies]
