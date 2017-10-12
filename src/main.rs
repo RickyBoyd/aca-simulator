@@ -9,7 +9,7 @@ fn main() {
     let instructions: Vec<u32> = vec![0b0000_0000_10_0001_0000_1000_0010_0000, 0, 0];
     let mut memory: [u32; MEM_SIZE] = [0; MEM_SIZE];
 
-    let mut regs = Registers{ gprs: [1; 32], pc: 0, npc: 0};
+    let mut regs = Registers{ gprs: [0; 32], pc: 0, npc: 0};
 
     loop {
         let i = fetch(&instructions);
@@ -33,15 +33,15 @@ struct Registers {
 #[derive(Debug)]
 enum Instruction {
     Nop,
-    Add(u8, u32, u32),
-    Sub(u8, u32, u32),
-    Mult(u8, u32, u32),
-    Div(u8, u32, u32),
-    Or(u8, u32, u32),
-    Xor(u8, u32, u32),
-    And(u8, u32, u32),
-    Sw(u32, u32, u32),
-    Lw(u8, u32, u32),
+    Add(usize, u32, u32),
+    Sub(usize, u32, u32),
+    Mult(usize, u32, u32),
+    Div(usize, u32, u32),
+    Or(usize, u32, u32),
+    Xor(usize, u32, u32),
+    And(usize, u32, u32),
+    Sw(u32, usize, usize),
+    Lw(usize, usize, usize),
 }
 
 // impl regs {
@@ -66,7 +66,7 @@ fn decode(i: u32, registers: Registers) -> Instruction {
         0b0000_0000 => {
             let func = (i & 0b11_1111) as u8;
             let shamt = ((i >> 6) & 0b1_1111) as u8;
-            let rd = ((i >> 11) & 0b1_1111) as u8;
+            let rd = ((i >> 11) & 0b1_1111) as usize;
             let rt = registers.gprs[((i >> 16) & 0b1_1111) as usize];
             let rs = registers.gprs[((i >> 21) & 0b1_1111) as usize];
             println!("func: {:b}", func);
@@ -78,27 +78,26 @@ fn decode(i: u32, registers: Registers) -> Instruction {
                 0b10_0100 => Instruction::And(rd, rs, rt),
                 _ => {
                     panic!("Unimplemented func {:b}", func); 
-                    Instruction::Nop
                 }
             }
         }
         0b0000_1000 => { //ADDI
             let imm = i & 0xFFFF;
-            let t = ((i >> 16) & 0b11111) as u8;
+            let t = ((i >> 16) & 0b11111) as usize;
             let s = ((i >> 21) & 0b11111) as usize;
             Instruction::Add(t, registers.gprs[s], imm)
         }
-        0b0010_0000 => { // LB
-            Instruction::Nop
-        }
         0b0010_0011 => { // LW
-            Instruction::Nop
-        }
-        0b0010_1000 => { // SB
-            Instruction::Nop
+            let imm = (i & 0xFFFF) as usize;
+            let t = ((i >> 16) & 0b11111) as usize;
+            let s = ((i >> 21) & 0b11111) as usize;
+            Instruction::Lw(t, registers.gprs[s] as usize, imm)
         }
         0b0010_1011 => { // SW
-            Instruction::Nop
+            let imm = (i & 0xFFFF) as usize;
+            let t = ((i >> 16) & 0b11111) as usize;
+            let s = ((i >> 21) & 0b11111) as usize;
+            Instruction::Sw(registers.gprs[t], registers.gprs[s] as usize, imm)
         }
         _ => {
             panic!("Unimplemented opcode {:b}", opcode);
@@ -107,7 +106,7 @@ fn decode(i: u32, registers: Registers) -> Instruction {
     }
 }
 
-fn execute(i: Instruction, memory: &mut [u32; MEM_SIZE]) -> Option<(u8, u32)> {
+fn execute(i: Instruction, memory: &mut [u32; MEM_SIZE]) -> Option<(usize, u32)> {
     match i {
         Instruction::Add(r, x, y) => Some((r, x + y)),
         Instruction::Sub(r, x ,y) => Some((r, x - y)),
@@ -116,15 +115,15 @@ fn execute(i: Instruction, memory: &mut [u32; MEM_SIZE]) -> Option<(u8, u32)> {
         Instruction::Or(r, x, y) => Some((r, x | y)),
         Instruction::Xor(r, x, y) => Some((r, x ^ y)),
         Instruction::And(r, x, y) => Some((r, x & y)),
-        Instruction::Lw(r, s, offset) => Some((r, memory[(s + offset) as usize])),
+        Instruction::Lw(r, s, offset) => Some((r, memory[s + offset])),
         Instruction::Sw(t, s, offset) => {
-            memory[(s + offset) as usize] = t;
+            memory[s + offset] = t;
             None
         }
         Instruction::Nop => None
     }
 }
 
-fn writeback(register: u8, result: u32, regs: &mut Registers ) {
-    regs.gprs[register as usize] = result;
+fn writeback(register: usize, result: u32, regs: &mut Registers ) {
+    regs.gprs[register] = result;
 }
