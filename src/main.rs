@@ -1,12 +1,40 @@
-const  MEM_SIZE: usize = 512;
+use std::io::prelude::*;
+use std::io::BufReader;
+use std::fs::File;
+use std::env;
+use std::path::Path;
 
+const MEM_SIZE: usize = 512;
+
+const ADD_FUNC: u32 = 0b000_0010_0000;
+const ADDI_OPCODE: u32 = 0b00_1000;
+const AND_FUNC: u32 = 0b000_0010_0100;
+const BEQ_OPCODE: u32 = 0b00_0100;
+const BNE_OPCODE: u32 = 0b00_0101;
+const DIV_FUNC: u32 = 0b0000_0000_0001_1010;
+const J_OPCODE: u32 = 0b00_0010;
+const LW_OPCODE: u32 = 0b1000_11;
+const MULT_FUNC: u32 = 0b0000_0000_0001_1000;
+const OR_FUNC: u32 = 0b000_0010_0101;
+const SUB_FUNC: u32 = 0b000_0010_0010;
+const SW_OPCODE: u32 = 0b10_1011;
+const XOR_FUNC: u32 = 0b000_0010_0110;
 
 fn main() {
     println!("Hello, world!");
 
-    //let instructions = read_program(args[0]);
+    let args: Vec<String> = env::args().collect();
 
-    let instructions: Vec<u32> = vec![0b0000_0000_10_0001_0000_1000_0010_0000, 0, 0];
+    let file = File::open(&args[1]).unwrap();
+
+    let buf = BufReader::new(file);
+    let assembly: Vec<String> = buf.lines().map(|l| l.expect("Could not parse line")).collect();
+
+    let instructions = assemble(assembly);
+    for i in instructions.iter() {
+        println!("{:032b}", i);
+    }
+    //let instructions: Vec<u32> = vec![0b0000_0000_10_0001_0000_1000_0010_0000, 0, 0];
     let mut memory: [u32; MEM_SIZE] = [0; MEM_SIZE];
 
     let mut regs = Registers{ gprs: [0; 32], pc: 0, npc: 0};
@@ -19,6 +47,7 @@ fn main() {
             writeback(reg, res, &mut regs);
         }
         println!("{:?}", regs);
+        break;
     }
 }
 
@@ -44,66 +73,13 @@ enum Instruction {
     Lw(usize, usize, usize),
 }
 
-// impl regs {
-//     fn advance_pc(&self) {
-    
-//     }
-// }
-
-// fn read_program(filepath: &str) -> Vec<u32> {
-//     //read in binary file 32 bits at a time into a vector
-// }
-
 fn fetch(instructions: &Vec<u32>) -> u32 {
-    0b0000_0000_10_0001_0000_1000_0010_0000
+    0
 }
 
 fn decode(i: u32, registers: Registers) -> Instruction {
-    let opcode = (i >> 26) as u8;
-    println!("instruction: {:032b}", i);
-    println!("opcode: {:b}", opcode);
-    match opcode {
-        0b0000_0000 => {
-            let func = (i & 0b11_1111) as u8;
-            let shamt = ((i >> 6) & 0b1_1111) as u8;
-            let rd = ((i >> 11) & 0b1_1111) as usize;
-            let rt = registers.gprs[((i >> 16) & 0b1_1111) as usize];
-            let rs = registers.gprs[((i >> 21) & 0b1_1111) as usize];
-            println!("func: {:b}", func);
-            match func {
-                0b10_0000 => Instruction::Add(rd, rs, rt),
-                0b10_0010 => Instruction::Sub(rd, rs, rt),
-                0b10_0101 => Instruction::Or(rd, rs, rt),
-                0b10_0110 => Instruction::Xor(rd, rs, rt),
-                0b10_0100 => Instruction::And(rd, rs, rt),
-                _ => {
-                    panic!("Unimplemented func {:b}", func); 
-                }
-            }
-        }
-        0b0000_1000 => { //ADDI
-            let imm = i & 0xFFFF;
-            let t = ((i >> 16) & 0b11111) as usize;
-            let s = ((i >> 21) & 0b11111) as usize;
-            Instruction::Add(t, registers.gprs[s], imm)
-        }
-        0b0010_0011 => { // LW
-            let imm = (i & 0xFFFF) as usize;
-            let t = ((i >> 16) & 0b11111) as usize;
-            let s = ((i >> 21) & 0b11111) as usize;
-            Instruction::Lw(t, registers.gprs[s] as usize, imm)
-        }
-        0b0010_1011 => { // SW
-            let imm = (i & 0xFFFF) as usize;
-            let t = ((i >> 16) & 0b11111) as usize;
-            let s = ((i >> 21) & 0b11111) as usize;
-            Instruction::Sw(registers.gprs[t], registers.gprs[s] as usize, imm)
-        }
-        _ => {
-            panic!("Unimplemented opcode {:b}", opcode);
-            Instruction::Nop
-        }
-    }
+    println!("instruction: {}", i);
+    Instruction::Nop
 }
 
 fn execute(i: Instruction, memory: &mut [u32; MEM_SIZE]) -> Option<(usize, u32)> {
@@ -126,4 +102,119 @@ fn execute(i: Instruction, memory: &mut [u32; MEM_SIZE]) -> Option<(usize, u32)>
 
 fn writeback(register: usize, result: u32, regs: &mut Registers ) {
     regs.gprs[register] = result;
+}
+
+fn assemble(assembly: Vec<String>) -> Vec<u32> {
+    let mut instructions: Vec<u32> = Vec::new();
+
+    for line in assembly {
+        let split_inst: Vec<&str> = line.split_whitespace().collect();
+        match split_inst[0] {
+            "ADD" => {
+                //0000 00ss ssst tttt dddd d000 0010 0000
+                let instruction = opcode_zero(split_inst, ADD_FUNC);
+                instructions.push(instruction);
+            }
+            "ADDI" => { //ADDI
+                //0010 00ss ssst tttt iiii iiii iiii iiii
+                let instruction = two_regs_imm(split_inst, ADDI_OPCODE);
+                instructions.push(instruction);
+            }
+            "AND" => { 
+                //0000 00ss ssst tttt dddd d000 0010 0100
+                let instruction = opcode_zero(split_inst, AND_FUNC);
+                instructions.push(instruction);
+            }
+            "BEQ" => {
+                //0001 00ss ssst tttt iiii iiii iiii iiii
+                let instruction = two_regs_imm(split_inst, BEQ_OPCODE);
+                instructions.push(instruction);
+            }
+            "BNE" => {
+                //0001 01ss ssst tttt iiii iiii iiii iiii
+                let instruction = two_regs_imm(split_inst, BNE_OPCODE);
+                instructions.push(instruction);
+            }
+            "DIV" => {
+                //0000 00ss ssst tttt 0000 0000 0001 1010
+                let s = split_inst[1].parse::<u32>().unwrap();
+                let t = split_inst[2].parse::<u32>().unwrap();
+                let mut instruction: u32 = DIV_FUNC;
+                instruction |= t << 16;
+                instruction |= s << 21;
+                instructions.push(instruction);
+            }
+            "J" => {
+                //0000 10ii iiii iiii iiii iiii iiii iiii
+                let imm = split_inst[1].parse::<u32>().unwrap();
+                let mut instruction: u32 = J_OPCODE << 26;
+                instruction |= imm;
+                instructions.push(instruction);
+            }
+            "LW" => { // LW
+                //1000 11ss ssst tttt iiii iiii iiii iiii
+                let instruction = two_regs_imm(split_inst, LW_OPCODE);
+                instructions.push(instruction);
+            }
+            "MULT" => {
+                //0000 00ss ssst tttt 0000 0000 0001 1000
+                let s = split_inst[1].parse::<u32>().unwrap();
+                let t = split_inst[2].parse::<u32>().unwrap();
+                let mut instruction = MULT_FUNC;
+                instruction |= t << 16;
+                instruction |= s << 21;
+                instructions.push(instruction);
+            }
+            "NOOP" => {
+                instructions.push(0);
+            }
+            "OR" => {
+                //0000 00ss ssst tttt dddd d000 0010 0101
+                let instruction = opcode_zero(split_inst, OR_FUNC);
+                instructions.push(instruction);
+            }
+            "SUB" => {
+                //0000 00ss ssst tttt dddd d000 0010 0010
+                let instruction = opcode_zero(split_inst, SUB_FUNC);
+                instructions.push(instruction);
+            }
+            "SW" => { // SW
+                //1010 11ss ssst tttt iiii iiii iiii iiii
+                let instruction = two_regs_imm(split_inst, SW_OPCODE);
+                instructions.push(instruction);       
+            }
+            "XOR" => {
+                //0000 00ss ssst tttt dddd d--- --10 0110
+                let instruction = opcode_zero(split_inst, XOR_FUNC);
+                instructions.push(instruction);
+            }
+            _ => {
+                panic!("Unimplemented opcode {}", split_inst[0]);
+            }
+        };
+    }
+    return instructions;
+}
+
+fn opcode_zero(inst: Vec<&str>, func: u32) -> u32 {
+    let d = inst[1].parse::<u32>().unwrap();
+    let s = inst[2].parse::<u32>().unwrap();
+    let t = inst[3].parse::<u32>().unwrap();
+    let mut instruction: u32 = 0;
+    instruction |= func;
+    instruction |= d << 11;
+    instruction |= t << 16;
+    instruction |= s << 21;
+    return instruction;
+}
+
+fn two_regs_imm(split_inst: Vec<&str>, opcode: u32) -> u32{
+    let t = split_inst[1].parse::<u32>().unwrap();
+    let s = split_inst[2].parse::<u32>().unwrap();
+    let imm = split_inst[3].parse::<u32>().unwrap();
+    let mut instruction = opcode << 26;
+    instruction |= imm;
+    instruction |= t << 16;
+    instruction |= s << 21;
+    return instruction;
 }
