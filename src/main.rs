@@ -39,16 +39,22 @@ fn main() {
 
     let mut regs = Registers{ gprs: [0; 32], pc: 0, npc: 0};
 
+    let mut pc: usize = 0;
+
     loop {
-        let i = fetch(&instructions);
-        let i_decoded = decode(i, regs);
-        println!("{:?}", i_decoded);
-        if let Some((reg, res)) = execute(i_decoded, &mut memory) {
-            writeback(reg, res, &mut regs);
+        if let Some(instruction) = fetch(&instructions, &mut pc){
+            let i_decoded = decode(instruction, regs);
+            println!("{:?}", i_decoded);
+            if let Some((reg, res)) = execute(i_decoded, &mut memory) {
+                writeback(reg, res, &mut regs);
+            }            
+        } 
+        else {
+            break;
         }
         println!("{:?}", regs);
-        break;
     }
+    println!("{:?}", regs);
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -61,8 +67,11 @@ struct Registers {
 
 #[derive(Debug)]
 enum Instruction {
-    Nop,
+    Noop,
     Add(usize, u32, u32),
+    Beq(usize, u32, u32),
+    Bne(usize, u32, u32),
+    J(usize),
     Sub(usize, u32, u32),
     Mult(usize, u32, u32),
     Div(usize, u32, u32),
@@ -73,13 +82,75 @@ enum Instruction {
     Lw(usize, usize, usize),
 }
 
-fn fetch(instructions: &Vec<u32>) -> u32 {
-    0
+
+fn fetch(instructions: &Vec<u32>, pc: &mut usize) -> Option<u32> {
+    let inst = instructions[*pc];
+    *pc = *pc + 1;
+    if (*pc) >= instructions.len() {
+        return None;
+    }
+    Some(inst)
 }
 
 fn decode(i: u32, registers: Registers) -> Instruction {
-    println!("instruction: {}", i);
-    Instruction::Nop
+    println!("instruction: {:032b}", i);
+    if i == 0 {
+        return Instruction::Noop;
+    }
+
+    let opcode = i >> 26;
+    match opcode {
+        0 => {
+            let func = i & 0b111_1111_1111;
+            match func {
+                ADD_FUNC => {
+                    Instruction::Add(0, 0, 0)
+                }
+                AND_FUNC => {
+                    Instruction::And(0, 0, 0)
+                }
+                DIV_FUNC => {
+                    Instruction::Div(0, 0, 0)
+                }
+                MULT_FUNC => {
+                    Instruction::Mult(0, 0, 0)
+                }
+                OR_FUNC => {
+                    Instruction::Or(0, 0, 0)
+                }
+                XOR_FUNC => {
+                    Instruction::Xor(0, 0, 0)
+                }
+                _ => {
+                    panic!("{:b} is an unimplemented function");
+                    Instruction::Noop
+                }
+
+            }
+        }
+        ADDI_OPCODE => {
+            Instruction::Add(0, 0, 0)
+        }
+        BEQ_OPCODE => {
+            Instruction::Beq(0, 0, 0)
+        }
+        BNE_OPCODE => {
+            Instruction::Bne(0, 0, 0)
+        }
+        J_OPCODE => {
+            Instruction::J(0)
+        }
+        LW_OPCODE => {
+            Instruction::Lw(0, 0, 0)
+        }
+        SW_OPCODE => {
+            Instruction::Sw(0, 0, 0)
+        }
+        _ => {
+            panic!("{:b} is an unimplemented opcode", opcode);
+            Instruction::Noop
+        }
+    }
 }
 
 fn execute(i: Instruction, memory: &mut [u32; MEM_SIZE]) -> Option<(usize, u32)> {
@@ -96,7 +167,13 @@ fn execute(i: Instruction, memory: &mut [u32; MEM_SIZE]) -> Option<(usize, u32)>
             memory[s + offset] = t;
             None
         }
-        Instruction::Nop => None
+        Instruction::J(instruction) => {
+            *pc = instruction;
+            None
+        }
+        Instruction::Bne(x, y, z) => None,
+        Instruction::Beq(x, y, z) => None,
+        Instruction::Noop => None
     }
 }
 
@@ -137,11 +214,7 @@ fn assemble(assembly: Vec<String>) -> Vec<u32> {
             }
             "DIV" => {
                 //0000 00ss ssst tttt 0000 0000 0001 1010
-                let s = split_inst[1].parse::<u32>().unwrap();
-                let t = split_inst[2].parse::<u32>().unwrap();
-                let mut instruction: u32 = DIV_FUNC;
-                instruction |= t << 16;
-                instruction |= s << 21;
+                let instruction = opcode_zero(split_inst, DIV_FUNC);
                 instructions.push(instruction);
             }
             "J" => {
@@ -158,11 +231,7 @@ fn assemble(assembly: Vec<String>) -> Vec<u32> {
             }
             "MULT" => {
                 //0000 00ss ssst tttt 0000 0000 0001 1000
-                let s = split_inst[1].parse::<u32>().unwrap();
-                let t = split_inst[2].parse::<u32>().unwrap();
-                let mut instruction = MULT_FUNC;
-                instruction |= t << 16;
-                instruction |= s << 21;
+                let instruction = opcode_zero(split_inst, MULT_FUNC);
                 instructions.push(instruction);
             }
             "NOOP" => {
