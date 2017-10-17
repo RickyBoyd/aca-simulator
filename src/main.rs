@@ -2,23 +2,8 @@ use std::io::prelude::*;
 use std::io::BufReader;
 use std::fs::File;
 use std::env;
-use std::path::Path;
 
 const MEM_SIZE: usize = 512;
-
-const ADD_FUNC: u32 = 0b000_0010_0000;
-const ADDI_OPCODE: u32 = 0b00_1000;
-const AND_FUNC: u32 = 0b000_0010_0100;
-const BEQ_OPCODE: u32 = 0b00_0100;
-const BNE_OPCODE: u32 = 0b00_0101;
-const DIV_FUNC: u32 = 0b0000_0000_0001_1010;
-const J_OPCODE: u32 = 0b00_0010;
-const LW_OPCODE: u32 = 0b1000_11;
-const MULT_FUNC: u32 = 0b0000_0000_0001_1000;
-const OR_FUNC: u32 = 0b000_0010_0101;
-const SUB_FUNC: u32 = 0b000_0010_0010;
-const SW_OPCODE: u32 = 0b10_1011;
-const XOR_FUNC: u32 = 0b000_0010_0110;
 
 fn main() {
     println!("Hello, world!");
@@ -31,10 +16,11 @@ fn main() {
     let assembly: Vec<String> = buf.lines().map(|l| l.expect("Could not parse line")).collect();
 
     let instructions = assemble(assembly);
+
     for i in instructions.iter() {
-        println!("{:032b}", i);
+        println!("{:?}", i);
     }
-    //let instructions: Vec<u32> = vec![0b0000_0000_10_0001_0000_1000_0010_0000, 0, 0];
+
     let mut memory: [u32; MEM_SIZE] = [0; MEM_SIZE];
 
     let mut regs = Registers{ gprs: [0; 32], pc: 0, npc: 0};
@@ -45,7 +31,7 @@ fn main() {
         if let Some(instruction) = fetch(&instructions, &mut pc){
             let i_decoded = decode(instruction, regs);
             println!("{:?}", i_decoded);
-            if let Some((reg, res)) = execute(i_decoded, &mut memory) {
+            if let Some((reg, res)) = execute(i_decoded, &mut memory, &mut pc) {
                 writeback(reg, res, &mut regs);
             }            
         } 
@@ -54,7 +40,7 @@ fn main() {
         }
         println!("{:?}", regs);
     }
-    println!("{:?}", regs);
+    println!("End: {:?}", regs);
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -65,12 +51,30 @@ struct Registers {
     //more regs
 }
 
-#[derive(Debug)]
-enum Instruction {
+#[derive(Clone, Copy, Debug)]
+enum EncodedInstruction {
+    Noop,
+    Add(usize, usize, usize),
+    Addi(usize, usize, u32),
+    Beq(usize, usize, usize),
+    Bne(usize, usize, usize),
+    J(usize),
+    Sub(usize, usize, usize),
+    Mult(usize, usize, usize),
+    Div(usize, usize, usize),
+    Or(usize, usize, usize),
+    Xor(usize, usize, usize),
+    And(usize, usize, usize),
+    Sw(usize, usize),
+    Lw(usize, usize),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DecodedInstruction {
     Noop,
     Add(usize, u32, u32),
-    Beq(usize, u32, u32),
-    Bne(usize, u32, u32),
+    Beq(u32, u32, usize),
+    Bne(u32, u32, usize),
     J(usize),
     Sub(usize, u32, u32),
     Mult(usize, u32, u32),
@@ -78,102 +82,77 @@ enum Instruction {
     Or(usize, u32, u32),
     Xor(usize, u32, u32),
     And(usize, u32, u32),
-    Sw(u32, usize, usize),
-    Lw(usize, usize, usize),
+    Sw(u32, u32),
+    Lw(usize, u32),
 }
 
 
-fn fetch(instructions: &Vec<u32>, pc: &mut usize) -> Option<u32> {
-    let inst = instructions[*pc];
-    *pc = *pc + 1;
+fn fetch(instructions: &Vec<EncodedInstruction>, pc: &mut usize) -> Option<EncodedInstruction> {
+
     if (*pc) >= instructions.len() {
         return None;
     }
+    let inst = instructions[*pc];
+    *pc = *pc + 1;
     Some(inst)
 }
 
-fn decode(i: u32, registers: Registers) -> Instruction {
-    println!("instruction: {:032b}", i);
-    if i == 0 {
-        return Instruction::Noop;
-    }
+fn decode(instruction: EncodedInstruction, registers: Registers) -> DecodedInstruction {
+    println!("instruction: {:?}", instruction);
 
-    let opcode = i >> 26;
-    match opcode {
-        0 => {
-            let func = i & 0b111_1111_1111;
-            match func {
-                ADD_FUNC => {
-                    Instruction::Add(0, 0, 0)
-                }
-                AND_FUNC => {
-                    Instruction::And(0, 0, 0)
-                }
-                DIV_FUNC => {
-                    Instruction::Div(0, 0, 0)
-                }
-                MULT_FUNC => {
-                    Instruction::Mult(0, 0, 0)
-                }
-                OR_FUNC => {
-                    Instruction::Or(0, 0, 0)
-                }
-                XOR_FUNC => {
-                    Instruction::Xor(0, 0, 0)
-                }
-                _ => {
-                    panic!("{:b} is an unimplemented function");
-                    Instruction::Noop
-                }
-
-            }
-        }
-        ADDI_OPCODE => {
-            Instruction::Add(0, 0, 0)
-        }
-        BEQ_OPCODE => {
-            Instruction::Beq(0, 0, 0)
-        }
-        BNE_OPCODE => {
-            Instruction::Bne(0, 0, 0)
-        }
-        J_OPCODE => {
-            Instruction::J(0)
-        }
-        LW_OPCODE => {
-            Instruction::Lw(0, 0, 0)
-        }
-        SW_OPCODE => {
-            Instruction::Sw(0, 0, 0)
-        }
-        _ => {
-            panic!("{:b} is an unimplemented opcode", opcode);
-            Instruction::Noop
-        }
+    match instruction {
+        EncodedInstruction::Noop            => DecodedInstruction::Noop,
+        EncodedInstruction::Addi(d, s, imm) => DecodedInstruction::Add(d, registers.gprs[s], imm),  
+        EncodedInstruction::Add(d, s, t)    => DecodedInstruction::Add(d, registers.gprs[s], registers.gprs[t]),
+        EncodedInstruction::Beq(s, t, inst) => DecodedInstruction::Beq(registers.gprs[s], registers.gprs[t], inst),
+        EncodedInstruction::Bne(s, t, inst) => DecodedInstruction::Bne(registers.gprs[s], registers.gprs[t], inst),
+        EncodedInstruction::J(inst)         => DecodedInstruction::J(inst),
+        EncodedInstruction::Sub(d, s, t)    => DecodedInstruction::Sub(d, registers.gprs[s], registers.gprs[t]),
+        EncodedInstruction::Mult(d, s, t)   => DecodedInstruction::Mult(d, registers.gprs[s], registers.gprs[t]),
+        EncodedInstruction::Div(d, s, t)    => DecodedInstruction::Div(d, registers.gprs[s], registers.gprs[t]),
+        EncodedInstruction::Or(d, s, t)     => DecodedInstruction::Or(d, registers.gprs[s], registers.gprs[t]),
+        EncodedInstruction::Xor(d, s, t)    => DecodedInstruction::Xor(d, registers.gprs[s], registers.gprs[t]),
+        EncodedInstruction::And(d, s, t)    => DecodedInstruction::And(d, registers.gprs[s], registers.gprs[t]),
+        EncodedInstruction::Sw(t, s)        => DecodedInstruction::Sw(registers.gprs[t], registers.gprs[s]),
+        EncodedInstruction::Lw(d, t)        => DecodedInstruction::Lw(d, registers.gprs[t]),
+        // _ => {
+        //     panic!("{:?} is an unimplemented instruction", instruction);
+        //     EncodedInstruction::Noop
+        // }
     }
 }
 
-fn execute(i: Instruction, memory: &mut [u32; MEM_SIZE]) -> Option<(usize, u32)> {
+fn execute(i: DecodedInstruction, memory: &mut [u32; MEM_SIZE], pc: &mut usize) -> Option<(usize, u32)> {
     match i {
-        Instruction::Add(r, x, y) => Some((r, x + y)),
-        Instruction::Sub(r, x ,y) => Some((r, x - y)),
-        Instruction::Mult(r, x, y) => Some((r, x * y)),
-        Instruction::Div(r, x, y) => Some((r, x / y)),
-        Instruction::Or(r, x, y) => Some((r, x | y)),
-        Instruction::Xor(r, x, y) => Some((r, x ^ y)),
-        Instruction::And(r, x, y) => Some((r, x & y)),
-        Instruction::Lw(r, s, offset) => Some((r, memory[s + offset])),
-        Instruction::Sw(t, s, offset) => {
-            memory[s + offset] = t;
+        DecodedInstruction::Add(r, x, y) => Some((r, x + y)),
+        DecodedInstruction::Sub(r, x ,y) => Some((r, x - y)),
+        DecodedInstruction::Mult(r, x, y) => Some((r, x * y)),
+        DecodedInstruction::Div(r, x, y) => Some((r, x / y)),
+        DecodedInstruction::Or(r, x, y) => Some((r, x | y)),
+        DecodedInstruction::Xor(r, x, y) => Some((r, x ^ y)),
+        DecodedInstruction::And(r, x, y) => Some((r, x & y)),
+        DecodedInstruction::Lw(r, s) => Some((r, memory[s as usize])),
+        DecodedInstruction::Sw(t, s) => {
+            memory[s as usize] = t;
             None
         }
-        Instruction::J(instruction) => {
-            *pc = instruction;
+        DecodedInstruction::J(inst) => {
+            *pc = inst;
             None
         }
-        Instruction::Bne(x, y, z) => None,
-        Instruction::Beq(x, y, z) => None,
-        Instruction::Noop => None
+        DecodedInstruction::Bne(s, t, inst) => {
+            if s != t {
+                *pc = inst
+            }
+            None
+        },
+        DecodedInstruction::Beq(s, t, inst) => {
+            if s == t {
+                *pc = inst
+            }
+            None
+        }
+        DecodedInstruction::Noop => None
     }
 }
 
@@ -181,81 +160,66 @@ fn writeback(register: usize, result: u32, regs: &mut Registers ) {
     regs.gprs[register] = result;
 }
 
-fn assemble(assembly: Vec<String>) -> Vec<u32> {
-    let mut instructions: Vec<u32> = Vec::new();
+fn assemble(assembly: Vec<String>) -> Vec<EncodedInstruction> {
+    let mut instructions: Vec<EncodedInstruction> = Vec::new();
 
     for line in assembly {
         let split_inst: Vec<&str> = line.split_whitespace().collect();
         match split_inst[0] {
             "ADD" => {
-                //0000 00ss ssst tttt dddd d000 0010 0000
-                let instruction = opcode_zero(split_inst, ADD_FUNC);
-                instructions.push(instruction);
+                let (d, s, t) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Add(d, s, t));
             }
             "ADDI" => { //ADDI
-                //0010 00ss ssst tttt iiii iiii iiii iiii
-                let instruction = two_regs_imm(split_inst, ADDI_OPCODE);
-                instructions.push(instruction);
+                let (d, s, imm) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Addi(d, s, imm as u32));
             }
             "AND" => { 
-                //0000 00ss ssst tttt dddd d000 0010 0100
-                let instruction = opcode_zero(split_inst, AND_FUNC);
-                instructions.push(instruction);
+                let (d, s, t) = three_args(split_inst);
+                instructions.push(EncodedInstruction::And(d, s, t));
             }
             "BEQ" => {
-                //0001 00ss ssst tttt iiii iiii iiii iiii
-                let instruction = two_regs_imm(split_inst, BEQ_OPCODE);
-                instructions.push(instruction);
+                let (s, t, addr) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Beq(s, t, addr));
             }
             "BNE" => {
-                //0001 01ss ssst tttt iiii iiii iiii iiii
-                let instruction = two_regs_imm(split_inst, BNE_OPCODE);
-                instructions.push(instruction);
+                let (s, t, addr) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Bne(s, t, addr));
             }
             "DIV" => {
-                //0000 00ss ssst tttt 0000 0000 0001 1010
-                let instruction = opcode_zero(split_inst, DIV_FUNC);
-                instructions.push(instruction);
+                let (d, s, t) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Div(d, s, t));
             }
             "J" => {
-                //0000 10ii iiii iiii iiii iiii iiii iiii
-                let imm = split_inst[1].parse::<u32>().unwrap();
-                let mut instruction: u32 = J_OPCODE << 26;
-                instruction |= imm;
-                instructions.push(instruction);
+                let imm = split_inst[1].parse::<usize>().unwrap();
+                instructions.push(EncodedInstruction::J(imm));
             }
             "LW" => { // LW
-                //1000 11ss ssst tttt iiii iiii iiii iiii
-                let instruction = two_regs_imm(split_inst, LW_OPCODE);
-                instructions.push(instruction);
+                let (s, t) = two_args(split_inst);
+                instructions.push(EncodedInstruction::Lw(s, t));
             }
             "MULT" => {
-                //0000 00ss ssst tttt 0000 0000 0001 1000
-                let instruction = opcode_zero(split_inst, MULT_FUNC);
-                instructions.push(instruction);
+                let (d, s, t) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Mult(d, s, t));
             }
             "NOOP" => {
-                instructions.push(0);
+                instructions.push(EncodedInstruction::Noop);
             }
             "OR" => {
-                //0000 00ss ssst tttt dddd d000 0010 0101
-                let instruction = opcode_zero(split_inst, OR_FUNC);
-                instructions.push(instruction);
+                let (d, s, t) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Or(d, s, t));
             }
             "SUB" => {
-                //0000 00ss ssst tttt dddd d000 0010 0010
-                let instruction = opcode_zero(split_inst, SUB_FUNC);
-                instructions.push(instruction);
+                let (d, s, t) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Sub(d, s, t));
             }
-            "SW" => { // SW
-                //1010 11ss ssst tttt iiii iiii iiii iiii
-                let instruction = two_regs_imm(split_inst, SW_OPCODE);
-                instructions.push(instruction);       
+            "SW" => {
+                let (d, s) = two_args(split_inst);
+                instructions.push(EncodedInstruction::Sw(d, s));       
             }
             "XOR" => {
-                //0000 00ss ssst tttt dddd d--- --10 0110
-                let instruction = opcode_zero(split_inst, XOR_FUNC);
-                instructions.push(instruction);
+                let (d, s, t) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Xor(d, s, t));
             }
             _ => {
                 panic!("Unimplemented opcode {}", split_inst[0]);
@@ -265,25 +229,15 @@ fn assemble(assembly: Vec<String>) -> Vec<u32> {
     return instructions;
 }
 
-fn opcode_zero(inst: Vec<&str>, func: u32) -> u32 {
-    let d = inst[1].parse::<u32>().unwrap();
-    let s = inst[2].parse::<u32>().unwrap();
-    let t = inst[3].parse::<u32>().unwrap();
-    let mut instruction: u32 = 0;
-    instruction |= func;
-    instruction |= d << 11;
-    instruction |= t << 16;
-    instruction |= s << 21;
-    return instruction;
+fn three_args(inst: Vec<&str>) -> (usize, usize, usize) {
+    let d = inst[1].parse::<usize>().unwrap();
+    let s = inst[2].parse::<usize>().unwrap();
+    let t = inst[3].parse::<usize>().unwrap();
+    (d, s, t)
 }
 
-fn two_regs_imm(split_inst: Vec<&str>, opcode: u32) -> u32{
-    let t = split_inst[1].parse::<u32>().unwrap();
-    let s = split_inst[2].parse::<u32>().unwrap();
-    let imm = split_inst[3].parse::<u32>().unwrap();
-    let mut instruction = opcode << 26;
-    instruction |= imm;
-    instruction |= t << 16;
-    instruction |= s << 21;
-    return instruction;
+fn two_args(split_inst: Vec<&str>) -> (usize, usize) {
+    let t = split_inst[1].parse::<usize>().unwrap();
+    let s = split_inst[2].parse::<usize>().unwrap();
+    (t, s)
 }
