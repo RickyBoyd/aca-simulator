@@ -3,7 +3,7 @@ use std::io::BufReader;
 use std::fs::File;
 use std::env;
 
-const MEM_SIZE: usize = 512;
+const MEM_SIZE: usize = 52;
 
 fn main() {
     println!("Hello, world!");
@@ -21,9 +21,9 @@ fn main() {
         println!("{:?}", i);
     }
 
-    let mut memory: [u32; MEM_SIZE] = [0; MEM_SIZE];
+    let mut memory: [u32; MEM_SIZE] = [1; MEM_SIZE];
 
-    let mut regs = Registers{ gprs: [0; 8], pc: 0, npc: 0};
+    let mut regs = Registers{ gprs: [0; 32], pc: 0, npc: 0};
 
     let mut pc: usize = 0;
 
@@ -41,12 +41,15 @@ fn main() {
         println!("{:?}", regs);
     }
     println!("End: {:?}", regs);
-    println!("MEM[0]: {:?}", memory[0]);
+    //for i in 0..30 {
+    //    println!("MEM[{}]: {}", i, memory[i]);
+    //}
+    
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Registers {
-    gprs: [u32; 8], // 32 GPRS
+    gprs: [u32; 32], // 32 GPRS
     pc: u32,
     npc: u32,
     //more regs
@@ -58,6 +61,7 @@ enum EncodedInstruction {
     Add(usize, usize, usize),
     Addi(usize, usize, u32),
     And(usize, usize, usize),
+    Andi(usize, usize, u32),
     Beq(usize, usize, usize),
     Blt(usize, usize, usize),
     Div(usize, usize, usize),
@@ -70,8 +74,11 @@ enum EncodedInstruction {
     Mult(usize, usize, usize),
     Or(usize, usize, usize),
     Si(usize, u32),
+    Sl(usize, usize, u32),
+    Sr(usize, usize, u32),
     Sw(usize, usize),
     Sub(usize, usize, usize),
+    Subi(usize, usize, u32),
     Xor(usize, usize, usize),
 }
 
@@ -89,6 +96,8 @@ enum DecodedInstruction {
     Mov(usize, u32),
     Mult(usize, u32, u32),
     Or(usize, u32, u32),
+    Sl(usize, u32, u32),
+    Sr(usize, u32, u32),
     Sub(usize, u32, u32),
     Store(u32, u32),
     Xor(usize, u32, u32),
@@ -113,6 +122,7 @@ fn decode(instruction: EncodedInstruction, registers: Registers) -> DecodedInstr
         EncodedInstruction::Addi(d, s, imm) => DecodedInstruction::Add(d, registers.gprs[s], imm),  
         EncodedInstruction::Add(d, s, t)    => DecodedInstruction::Add(d, registers.gprs[s], registers.gprs[t]),
         EncodedInstruction::And(d, s, t)    => DecodedInstruction::And(d, registers.gprs[s], registers.gprs[t]),
+        EncodedInstruction::Andi(d, s, imm) => DecodedInstruction::And(d, registers.gprs[s], imm),
         EncodedInstruction::Beq(s, t, inst) => DecodedInstruction::Beq(registers.gprs[s], registers.gprs[t], inst),
         EncodedInstruction::Blt(s, t, inst) => DecodedInstruction::Blt(registers.gprs[s], registers.gprs[t], inst),
         EncodedInstruction::Div(d, s, t)    => DecodedInstruction::Div(d, registers.gprs[s], registers.gprs[t]),
@@ -124,9 +134,12 @@ fn decode(instruction: EncodedInstruction, registers: Registers) -> DecodedInstr
         EncodedInstruction::Mov(d, s)       => DecodedInstruction::Mov(d, registers.gprs[s]),
         EncodedInstruction::Mult(d, s, t)   => DecodedInstruction::Mult(d, registers.gprs[s], registers.gprs[t]),
         EncodedInstruction::Or(d, s, t)     => DecodedInstruction::Or(d, registers.gprs[s], registers.gprs[t]),
+        EncodedInstruction::Sl(d, s, t)     => DecodedInstruction::Sl(d, registers.gprs[s], t),
+        EncodedInstruction::Sr(d, s, t)     => DecodedInstruction::Sr(d, registers.gprs[s], t),
         EncodedInstruction::Sub(d, s, t)    => DecodedInstruction::Sub(d, registers.gprs[s], registers.gprs[t]),
+        EncodedInstruction::Subi(d, s, imm) => DecodedInstruction::Sub(d, registers.gprs[s], imm),
         EncodedInstruction::Si(t, imm)      => DecodedInstruction::Store(registers.gprs[t], imm),
-        EncodedInstruction::Sw(t, s)        => DecodedInstruction::Store(registers.gprs[t], registers.gprs[s]),
+        EncodedInstruction::Sw(s, d)        => DecodedInstruction::Store(registers.gprs[s], registers.gprs[d]),
         EncodedInstruction::Xor(d, s, t)    => DecodedInstruction::Xor(d, registers.gprs[s], registers.gprs[t]),
         // _ => {
         //     panic!("{:?} is an unimplemented instruction", instruction);
@@ -163,6 +176,8 @@ fn execute(i: DecodedInstruction, memory: &mut [u32; MEM_SIZE], pc: &mut usize) 
         DecodedInstruction::Mov(d, s) => Some((d, s)),
         DecodedInstruction::Mult(r, x, y) => Some((r, x * y)),
         DecodedInstruction::Or(r, x, y) => Some((r, x | y)),
+        DecodedInstruction::Sl(r, x, y) => Some((r, x << y)),
+        DecodedInstruction::Sr(r, x, y) => Some((r, x >> y)),
         DecodedInstruction::Sub(r, x ,y) => Some((r, x - y)),
         DecodedInstruction::Store(t, s) => {
             memory[s as usize] = t;
@@ -193,6 +208,10 @@ fn assemble(assembly: Vec<String>) -> Vec<EncodedInstruction> {
             "AND" => { 
                 let (d, s, t) = three_args(split_inst);
                 instructions.push(EncodedInstruction::And(d, s, t));
+            }
+            "ANDI" => { 
+                let (d, s, imm) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Andi(d, s, imm as u32));
             }
             "BEQ" => {
                 let (s, t, addr) = three_args(split_inst);
@@ -241,9 +260,21 @@ fn assemble(assembly: Vec<String>) -> Vec<EncodedInstruction> {
                 let (d, s, t) = three_args(split_inst);
                 instructions.push(EncodedInstruction::Or(d, s, t));
             }
+            "SL" => {
+                let (d, s, t) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Sl(d, s, t as u32));
+            }
+            "SR" => {
+                let (d, s, t) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Sr(d, s, t as u32));
+            }
             "SUB" => {
                 let (d, s, t) = three_args(split_inst);
                 instructions.push(EncodedInstruction::Sub(d, s, t));
+            }
+            "SUBI" => {
+                let (d, s, imm) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Subi(d, s, imm as u32));
             }
             "SI" => {
                 let (s, imm) = two_args(split_inst);
