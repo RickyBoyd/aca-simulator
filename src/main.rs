@@ -23,15 +23,15 @@ fn main() {
 
     let mut memory: [u32; MEM_SIZE] = [0; MEM_SIZE];
 
-    let mut regs = Registers{ gprs: [0; 32], pc: 0, npc: 0};
+    let mut regs = Registers{ gprs: [0; 8], pc: 0, npc: 0};
 
     let mut pc: usize = 0;
 
     loop {
         if let Some(instruction) = fetch(&instructions, &mut pc){
             let i_decoded = decode(instruction, regs);
-            println!("{:?}", i_decoded);
             if let Some((reg, res)) = execute(i_decoded, &mut memory, &mut pc) {
+                println!("WB reg: {} res: {}", reg, res);
                 writeback(reg, res, &mut regs);
             }            
         } 
@@ -46,7 +46,7 @@ fn main() {
 
 #[derive(Clone, Copy, Debug)]
 struct Registers {
-    gprs: [u32; 32], // 32 GPRS
+    gprs: [u32; 8], // 32 GPRS
     pc: u32,
     npc: u32,
     //more regs
@@ -59,12 +59,13 @@ enum EncodedInstruction {
     Addi(usize, usize, u32),
     And(usize, usize, usize),
     Beq(usize, usize, usize),
-    Bne(usize, usize, usize),
+    Blt(usize, usize, usize),
     Div(usize, usize, usize),
     J(usize),
     Ldc(usize, u32),
     Li(usize, u32),
     Lw(usize, usize),
+    Mod(usize, usize, usize),
     Mov(usize, usize),
     Mult(usize, usize, usize),
     Or(usize, usize, usize),
@@ -80,10 +81,11 @@ enum DecodedInstruction {
     Add(usize, u32, u32),
     And(usize, u32, u32),
     Beq(u32, u32, usize),
-    Bne(u32, u32, usize),
+    Blt(u32, u32, usize),
     Div(usize, u32, u32),
     J(usize),
     Load(usize, u32),
+    Mod(usize, u32, u32),
     Mov(usize, u32),
     Mult(usize, u32, u32),
     Or(usize, u32, u32),
@@ -104,7 +106,7 @@ fn fetch(instructions: &Vec<EncodedInstruction>, pc: &mut usize) -> Option<Encod
 }
 
 fn decode(instruction: EncodedInstruction, registers: Registers) -> DecodedInstruction {
-    println!("instruction: {:?}", instruction);
+    println!("Encoded instruction: {:?}", instruction);
 
     match instruction {
         EncodedInstruction::Noop            => DecodedInstruction::Noop,
@@ -112,12 +114,13 @@ fn decode(instruction: EncodedInstruction, registers: Registers) -> DecodedInstr
         EncodedInstruction::Add(d, s, t)    => DecodedInstruction::Add(d, registers.gprs[s], registers.gprs[t]),
         EncodedInstruction::And(d, s, t)    => DecodedInstruction::And(d, registers.gprs[s], registers.gprs[t]),
         EncodedInstruction::Beq(s, t, inst) => DecodedInstruction::Beq(registers.gprs[s], registers.gprs[t], inst),
-        EncodedInstruction::Bne(s, t, inst) => DecodedInstruction::Bne(registers.gprs[s], registers.gprs[t], inst),
+        EncodedInstruction::Blt(s, t, inst) => DecodedInstruction::Blt(registers.gprs[s], registers.gprs[t], inst),
         EncodedInstruction::Div(d, s, t)    => DecodedInstruction::Div(d, registers.gprs[s], registers.gprs[t]),
         EncodedInstruction::J(inst)         => DecodedInstruction::J(inst),
         EncodedInstruction::Ldc(d, imm)     => DecodedInstruction::Mov(d, imm),
         EncodedInstruction::Li(d, imm)      => DecodedInstruction::Load(d, imm),
         EncodedInstruction::Lw(d, t)        => DecodedInstruction::Load(d, registers.gprs[t]),
+        EncodedInstruction::Mod(d, s, t)    => DecodedInstruction::Mod(d, registers.gprs[s], registers.gprs[t]),
         EncodedInstruction::Mov(d, s)       => DecodedInstruction::Mov(d, registers.gprs[s]),
         EncodedInstruction::Mult(d, s, t)   => DecodedInstruction::Mult(d, registers.gprs[s], registers.gprs[t]),
         EncodedInstruction::Or(d, s, t)     => DecodedInstruction::Or(d, registers.gprs[s], registers.gprs[t]),
@@ -133,12 +136,13 @@ fn decode(instruction: EncodedInstruction, registers: Registers) -> DecodedInstr
 }
 
 fn execute(i: DecodedInstruction, memory: &mut [u32; MEM_SIZE], pc: &mut usize) -> Option<(usize, u32)> {
+    println!("Decoded instruction: {:?}", i);
     match i {
         DecodedInstruction::Noop => None,
         DecodedInstruction::Add(r, x, y) => Some((r, x + y)),
         DecodedInstruction::And(r, x, y) => Some((r, x & y)),
-        DecodedInstruction::Bne(s, t, inst) => {
-            if s != t {
+        DecodedInstruction::Blt(s, t, inst) => {
+            if s < t {
                 *pc = inst
             }
             None
@@ -155,6 +159,7 @@ fn execute(i: DecodedInstruction, memory: &mut [u32; MEM_SIZE], pc: &mut usize) 
             None
         }
         DecodedInstruction::Load(r, s) => Some((r, memory[s as usize])),
+        DecodedInstruction::Mod(d, s, t) => Some((d, s % t)),
         DecodedInstruction::Mov(d, s) => Some((d, s)),
         DecodedInstruction::Mult(r, x, y) => Some((r, x * y)),
         DecodedInstruction::Or(r, x, y) => Some((r, x | y)),
@@ -193,9 +198,9 @@ fn assemble(assembly: Vec<String>) -> Vec<EncodedInstruction> {
                 let (s, t, addr) = three_args(split_inst);
                 instructions.push(EncodedInstruction::Beq(s, t, addr));
             }
-            "BNE" => {
+            "BLT" => {
                 let (s, t, addr) = three_args(split_inst);
-                instructions.push(EncodedInstruction::Bne(s, t, addr));
+                instructions.push(EncodedInstruction::Blt(s, t, addr));
             }
             "DIV" => {
                 let (d, s, t) = three_args(split_inst);
@@ -216,6 +221,10 @@ fn assemble(assembly: Vec<String>) -> Vec<EncodedInstruction> {
             "LW" => { // LW
                 let (s, t) = two_args(split_inst);
                 instructions.push(EncodedInstruction::Lw(s, t));
+            }
+            "MOD" => {
+                let (d, s, t) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Mod(d, s, t));
             }
             "MOV" =>{
                 let (d, s) = two_args(split_inst);
