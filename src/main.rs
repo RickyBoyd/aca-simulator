@@ -23,6 +23,8 @@ fn main() {
 
     let instructions = assemble(assembly);
 
+    let num_instructions = instructions.len();
+
     // for i in instructions.iter() {
     //     println!("{:?}", i);
     // }
@@ -71,6 +73,7 @@ fn main() {
         writeback(tick_sender_w, wb_recv, reg_wb_sender);
     });
 
+    let mut cycles = 0;
     loop {
         println!("MAIN 1");
         let f = tick_recv_f.recv().unwrap();
@@ -92,6 +95,9 @@ fn main() {
     let w = tick_recv_w.recv().unwrap();
     let w = tick_recv_w.recv().unwrap();
 
+    cycles += 3;
+
+    println!("Instructions per cycle: {}", cycles as f32  / num_instructions as f32);
     // loop {
     //     if let Some(instruction) = fetch(&instructions, &mut pc){
     //         let i_decoded = decode(instruction, regs);
@@ -251,7 +257,6 @@ fn decode(registers: &mut Registers, clock: SyncSender<i32>, fetch_recv: Receive
     }
 
     //Do some stuff here toc ollect the last two register results
-
     loop {
         let wb = reg_wb_recv.recv().unwrap();
         if let ExecuteResult::Halt = wb {
