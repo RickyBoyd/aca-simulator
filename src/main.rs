@@ -97,6 +97,8 @@ fn main() {
 
     cycles += 3;
 
+    println!("Instructions executed: {}", num_instructions);
+    println!("Number of cycles: {}", cycles);
     println!("Instructions per cycle: {}", cycles as f32  / num_instructions as f32);
     // loop {
     //     if let Some(instruction) = fetch(&instructions, &mut pc){
