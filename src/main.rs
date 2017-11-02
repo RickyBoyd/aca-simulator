@@ -84,6 +84,7 @@ fn main() {
         println!("MAIN 4");
         let w = tick_recv_w.recv().unwrap();
         println!("tick");
+        cycles += 1;
         if f == 0 {
             break;
         }
@@ -99,7 +100,7 @@ fn main() {
 
     println!("Instructions executed: {}", num_instructions);
     println!("Number of cycles: {}", cycles);
-    println!("Instructions per cycle: {}", cycles as f32  / num_instructions as f32);
+    println!("Instructions per cycle: {}", num_instructions as f32  / cycles as f32);
     // loop {
     //     if let Some(instruction) = fetch(&instructions, &mut pc){
     //         let i_decoded = decode(instruction, regs);
