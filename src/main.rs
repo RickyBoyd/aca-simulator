@@ -22,7 +22,7 @@ fn main() {
 
     let instructions = assemble(assembly);
 
-    let num_instructions = instructions.len();
+    let num_instructions = instructions.instructions.len();
 
     // for i in instructions.iter() {
     //     println!("{:?}", i);
@@ -79,6 +79,8 @@ fn main() {
         let e_res = execute(&mut memory, &pc_sender_e, &decode_recv, &wb_sender);
         let d_res = decode(&mut regs, &fetch_recv, &decode_sender, &reg_wb_recv);
         let f_res = fetch(&mut fetch_unit, &instructions, &pc_recv_f, &fetch_sender);
+        println!("CYCLE");
+        println!("");
         if (w_res + e_res + d_res + f_res) == 0 {
             break;
         }
@@ -99,22 +101,35 @@ fn main() {
     
 }
 
-fn fetch(fetch_unit: &mut FetchUnit, instructions: &Vec<EncodedInstruction>, pc_receiver: &Receiver<Option<usize>>, 
+struct Instructions {
+    instructions: Vec<EncodedInstruction>,
+}
+
+impl Instructions {
+    fn get_instruction(&self, position: usize) -> EncodedInstruction {
+        if position < self.instructions.len() {
+            self.instructions[position]
+        } else {
+            EncodedInstruction::Halt
+        }
+    }
+}
+
+fn fetch(fetch_unit: &mut FetchUnit, instructions: &Instructions, pc_receiver: &Receiver<Option<usize>>, 
          fetch_sender: &SyncSender<EncodedInstruction>) -> u32 {
-    let prev_pc = fetch_unit.pc;
+
+    let inst = instructions.get_instruction(fetch_unit.pc);
     match pc_receiver.recv().unwrap() {
         Some(addr) => fetch_unit.pc = addr,
         None => fetch_unit.pc += 1,
     };
-    if fetch_unit.pc >= instructions.len() {
-        println!("Need to finish here!");
-        fetch_sender.send(EncodedInstruction::Halt);
-        return 0;
-    }
-    let inst = instructions[prev_pc];
+    
     println!("pc: {}", fetch_unit.pc);
     println!("Fetched instruction: {:?}", inst);
     fetch_sender.send(inst).unwrap();
+    if let EncodedInstruction::Halt = inst {
+        return 0;
+    }
     return 1;
 }
 
@@ -291,8 +306,7 @@ enum ExecuteResult {
     Writeback(usize, u32),
 }
 
-
-fn assemble(assembly: Vec<String>) -> Vec<EncodedInstruction> {
+fn assemble(assembly: Vec<String>) -> Instructions {
     let mut instructions: Vec<EncodedInstruction> = Vec::new();
 
     for line in assembly {
@@ -394,7 +408,7 @@ fn assemble(assembly: Vec<String>) -> Vec<EncodedInstruction> {
             }
         };
     }
-    return instructions;
+    Instructions{ instructions: instructions }
 }
 
 fn three_args(inst: Vec<&str>) -> (usize, usize, usize) {
