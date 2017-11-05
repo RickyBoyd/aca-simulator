@@ -54,7 +54,7 @@ fn main() {
     fetch_sender.send(EncodedInstruction::Noop).unwrap();
     decode_sender.send(DecodedInstruction::Noop).unwrap();
     wb_sender.send(ExecuteResult::None).unwrap();
-    reset_d_sender.send(false);
+    reset_d_sender.send(false).unwrap();
 
     let mut cycles = 0;
     let mut fetch_unit = FetchUnit::new();
@@ -177,6 +177,7 @@ fn execute(exec_unit: &mut ExecutionUnit, memory: &mut [u32; MEM_SIZE], pc_sende
            reset_decode: &SyncSender<bool>) -> u32 {
     
     let instruction = decode_recv.recv().unwrap();    
+    let reorder_buffer_pos = exec_unit.reorder_buffer.get_new_pos();
     let mut pc: Option<usize> = None;
     let mut stalled = false;
     let mut reset = false;
@@ -228,20 +229,25 @@ fn execute(exec_unit: &mut ExecutionUnit, memory: &mut [u32; MEM_SIZE], pc_sende
     };
     
     println!("Execute result {:?}", wb);
-    wb_sender.send(wb).unwrap();
+    exec_unit.reorder_buffer.insert(reorder_buffer_pos, wb);
+    println!("{:?}", exec_unit.reorder_buffer);
+    wb_sender.send(exec_unit.reorder_buffer.get_writeback()).unwrap();
+    println!("{:?}", exec_unit.reorder_buffer);
     pc_sender.send(pc).unwrap();
 
     //set the stalled signal for execute and decode
-    reset_decode.send(reset);
+    reset_decode.send(reset).unwrap();
     exec_unit.branch_reset = reset;
 
     //set the stalled signal for fetch and decode
-    stalled_fetch.send(stalled);
-    stalled_decode.send(stalled);
+    stalled_fetch.send(stalled).unwrap();
+    stalled_decode.send(stalled).unwrap();
     if let DecodedInstruction::Halt = instruction {
-        return 0;
+        0
     }
-    return 1;
+    else {
+        1
+    }
 }
 
 fn writeback(registers: &mut Registers, wb_recv: &Receiver<ExecuteResult>) -> u32 {
@@ -257,15 +263,15 @@ fn writeback(registers: &mut Registers, wb_recv: &Receiver<ExecuteResult>) -> u3
     }
 }
 
-struct ExecutionUnit{
-    reorderBuffer: ReorderBuffer,
+struct ExecutionUnit {
+    reorder_buffer: ReorderBuffer,
     branch_reset: bool,
 }
 
 impl ExecutionUnit {
     fn new() -> ExecutionUnit {
         ExecutionUnit {
-            reorderBuffer: ReorderBuffer::new(),
+            reorder_buffer: ReorderBuffer::new(),
             branch_reset: false,
         }
     }
@@ -285,10 +291,11 @@ impl Instructions {
     }
 }
 
+#[derive(Debug)]
 struct ReorderBuffer {
     oldest: usize,
     newest: usize,
-    buffer: [ExecuteResult; 16],
+    buffer: [Option<ExecuteResult>; 16],
 }
 
 impl ReorderBuffer {
@@ -296,7 +303,7 @@ impl ReorderBuffer {
         ReorderBuffer {
             oldest: 0,
             newest: 0,
-            buffer: [ExecuteResult::None ; 16],
+            buffer: [None ; 16],
         }
     }
 
@@ -306,6 +313,19 @@ impl ReorderBuffer {
         ret
     }
 
+    fn insert(&mut self, pos: usize, result: ExecuteResult) -> () {
+        self.buffer[pos] = Some(result);
+    }
+
+    fn get_writeback(&mut self) -> ExecuteResult {
+        if let Some(result) = self.buffer[self.oldest] {
+            self.buffer[self.oldest] = None;
+            self.oldest = (self.oldest + 1) % self.buffer.len();
+            result
+        } else {
+            ExecuteResult::None
+        }
+    }
 }
 
 struct FetchUnit {
