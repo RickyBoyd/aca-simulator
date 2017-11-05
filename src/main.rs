@@ -2,7 +2,6 @@ use std::io::prelude::*;
 use std::io::BufReader;
 use std::fs::File;
 use std::env;
-use std::sync::mpsc::channel;
 use std::sync::mpsc::sync_channel;
 use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::Receiver;
@@ -32,59 +31,48 @@ fn main() {
 
     let mut regs = Registers{ gprs: [0; 32]};
 
-    //need a clock channel
-    // let (tick_sender_f, tick_recv_f) = sync_channel::<i32>(0);
-    // let (tick_sender_d, tick_recv_d) = sync_channel::<i32>(0);
-    // let (tick_sender_e, tick_recv_e) = sync_channel::<i32>(0);
-    // let (tick_sender_w, tick_recv_w) = sync_channel::<i32>(0);
-
     //Send pc from execute to fetch + control value with Optional None -> 0
-    let (pc_sender_e, pc_recv_f) = sync_channel::<Option<usize>>(2);
+    let (pc_sender_e, pc_recv_f) = sync_channel::<Option<usize>>(1);
 
     //need a channel from fetch -> decode
-    let (fetch_sender, fetch_recv) = sync_channel::<EncodedInstruction>(2);
+    let (fetch_sender, fetch_recv) = sync_channel::<EncodedInstruction>(1);
 
     //need a channel from decode -> execute
-    let (decode_sender, decode_recv) = sync_channel::<DecodedInstruction>(2);
+    let (decode_sender, decode_recv) = sync_channel::<DecodedInstruction>(1);
 
     //need a channel from execute -> wb
-    let (wb_sender, wb_recv) = sync_channel::<ExecuteResult>(2);
+    let (wb_sender, wb_recv) = sync_channel::<ExecuteResult>(1);
 
-    let (reg_wb_sender, reg_wb_recv) = sync_channel::<ExecuteResult>(2);
+    //Channel to signal stalled or not to fetch
+    let (stalled_f_sender, stalled_f_recv) = sync_channel::<bool>(1);
+    let (stalled_d_sender, stalled_d_recv) = sync_channel::<bool>(1);
+
+    //Channel for setting reset signal for decode stage
+    let (reset_d_sender, reset_d_recv) = sync_channel::<bool>(2);
 
     //Need to put initial values into inter stage channels plus signal channels
-    reg_wb_sender.send(ExecuteResult::None).unwrap();
-    pc_sender_e.send(None).unwrap();
     fetch_sender.send(EncodedInstruction::Noop).unwrap();
     decode_sender.send(DecodedInstruction::Noop).unwrap();
     wb_sender.send(ExecuteResult::None).unwrap();
-
-    // thread::Builder::new().name("fetch".to_string()).spawn(move || {
-    //     fetch(instructions, tick_sender_f, pc_recv_f, fetch_sender);
-    // });
-    // thread::Builder::new().name("decode".to_string()).spawn(move || {
-    //      decode(&mut regs, tick_sender_d, fetch_recv, decode_sender, reg_wb_recv);
-    // });
-    // thread::Builder::new().name("execute".to_string()).spawn(move || {
-    //      execute(&mut memory, tick_sender_e, pc_sender_e, decode_recv, wb_sender);
-    // });
-    // thread::Builder::new().name("writeback".to_string()).spawn(|| {
-    //     writeback(tick_sender_w, wb_recv, reg_wb_sender);
-    // });
+    reset_d_sender.send(false);
 
     let mut cycles = 0;
-    let mut fetch_unit = FetchUnit{ pc: 0 };
+    let mut fetch_unit = FetchUnit::new();
+    let mut exec_unit = ExecutionUnit::new();
+
     loop {
-        let w_res = writeback(&wb_recv, &reg_wb_sender);
-        let e_res = execute(&mut memory, &pc_sender_e, &decode_recv, &wb_sender);
-        let d_res = decode(&mut regs, &fetch_recv, &decode_sender, &reg_wb_recv);
-        let f_res = fetch(&mut fetch_unit, &instructions, &pc_recv_f, &fetch_sender);
+        let w_res = writeback(&mut regs, &wb_recv);
+        let e_res = execute(&mut exec_unit,&mut memory, &pc_sender_e, &decode_recv, 
+                            &wb_sender, &stalled_f_sender, &stalled_d_sender, &reset_d_sender);
+
+        let d_res = decode(regs, &fetch_recv, &decode_sender, &stalled_d_recv, &reset_d_recv);
+        let f_res = fetch(&mut fetch_unit, &instructions, &pc_recv_f, &fetch_sender, &stalled_f_recv);
         println!("CYCLE");
         println!("");
+        cycles += 1;
         if (w_res + e_res + d_res + f_res) == 0 {
             break;
         }
-        cycles += 1;
     }
     //finish off last three cycles
     println!("here1");
@@ -98,7 +86,189 @@ fn main() {
     //for i in 0..30 {
     //    println!("MEM[{}]: {}", i, memory[i]);
     //}
+}
+
+fn fetch(fetch_unit: &mut FetchUnit, instructions: &Instructions, pc_receiver: &Receiver<Option<usize>>, 
+         fetch_sender: &SyncSender<EncodedInstruction>, stalled: &Receiver<bool>) -> u32 {
+
+    match stalled.recv().unwrap() {
+        true => 1,
+        false => {
+            let inst = instructions.get_instruction(fetch_unit.pc);
+            match pc_receiver.recv().unwrap() {
+                Some(addr) => fetch_unit.pc = addr,
+                None => fetch_unit.pc += 1,
+            };
     
+            println!("pc: {}", fetch_unit.pc);
+            println!("Fetched instruction: {:?}", inst);
+            fetch_sender.send(inst).unwrap();
+            if let EncodedInstruction::Halt = inst {
+                0
+            }
+            else {
+                1
+            }
+        }
+    }
+
+    
+}
+
+fn decode(registers: Registers, fetch_recv: &Receiver<EncodedInstruction>, 
+          decoded_sender: &SyncSender<DecodedInstruction>, stalled: &Receiver<bool>,
+          reset: &Receiver<bool>) -> u32 {
+    
+    match stalled.recv().unwrap() {
+        true => 1,
+        false => {
+            let instruction = fetch_recv.recv().unwrap();
+            let decoded = match reset.recv().unwrap() {
+                true => {
+                    DecodedInstruction::Noop
+                },
+                false => {
+                    match instruction {
+                        EncodedInstruction::Noop            => DecodedInstruction::Noop,
+                        EncodedInstruction::Halt            => DecodedInstruction::Halt,
+                        EncodedInstruction::Addi(d, s, imm) => DecodedInstruction::Add(d, registers.gprs[s], imm),  
+                        EncodedInstruction::Add(d, s, t)    => DecodedInstruction::Add(d, registers.gprs[s], registers.gprs[t]),
+                        EncodedInstruction::And(d, s, t)    => DecodedInstruction::And(d, registers.gprs[s], registers.gprs[t]),
+                        EncodedInstruction::Andi(d, s, imm) => DecodedInstruction::And(d, registers.gprs[s], imm),
+                        EncodedInstruction::Beq(s, t, inst) => DecodedInstruction::Beq(registers.gprs[s], registers.gprs[t], inst),
+                        EncodedInstruction::Blt(s, t, inst) => DecodedInstruction::Blt(registers.gprs[s], registers.gprs[t], inst),
+                        EncodedInstruction::Div(d, s, t)    => DecodedInstruction::Div(d, registers.gprs[s], registers.gprs[t]),
+                        EncodedInstruction::J(inst)         => DecodedInstruction::J(inst),
+                        EncodedInstruction::Ldc(d, imm)     => DecodedInstruction::Mov(d, imm),
+                        EncodedInstruction::Li(d, imm)      => DecodedInstruction::Load(d, imm),
+                        EncodedInstruction::Lw(d, t)        => DecodedInstruction::Load(d, registers.gprs[t]),
+                        EncodedInstruction::Mod(d, s, t)    => DecodedInstruction::Mod(d, registers.gprs[s], registers.gprs[t]),
+                        EncodedInstruction::Mov(d, s)       => DecodedInstruction::Mov(d, registers.gprs[s]),
+                        EncodedInstruction::Mult(d, s, t)   => DecodedInstruction::Mult(d, registers.gprs[s], registers.gprs[t]),
+                        EncodedInstruction::Or(d, s, t)     => DecodedInstruction::Or(d, registers.gprs[s], registers.gprs[t]),
+                        EncodedInstruction::Sl(d, s, t)     => DecodedInstruction::Sl(d, registers.gprs[s], t),
+                        EncodedInstruction::Sr(d, s, t)     => DecodedInstruction::Sr(d, registers.gprs[s], t),
+                        EncodedInstruction::Sub(d, s, t)    => DecodedInstruction::Sub(d, registers.gprs[s], registers.gprs[t]),
+                        EncodedInstruction::Subi(d, s, imm) => DecodedInstruction::Sub(d, registers.gprs[s], imm),
+                        EncodedInstruction::Si(t, imm)      => DecodedInstruction::Store(registers.gprs[t], imm),
+                        EncodedInstruction::Sw(s, d)        => DecodedInstruction::Store(registers.gprs[s], registers.gprs[d]),
+                        EncodedInstruction::Xor(d, s, t)    => DecodedInstruction::Xor(d, registers.gprs[s], registers.gprs[t]),
+                        // _ => {
+                        //     panic!("{:?} is an unimplemented instruction", instruction);
+                        //     EncodedInstruction::Noop
+                        // }
+                    }
+                },
+            };
+            println!("Decoded instruction: {:?}", decoded);
+            decoded_sender.send(decoded).unwrap();
+            if let DecodedInstruction::Halt = decoded {
+                0
+            } else {
+                1
+            }
+        },
+    }
+}
+
+fn execute(exec_unit: &mut ExecutionUnit, memory: &mut [u32; MEM_SIZE], pc_sender: &SyncSender<Option<usize>>, 
+           decode_recv: &Receiver<DecodedInstruction>, wb_sender: &SyncSender<ExecuteResult>,
+           stalled_fetch: &SyncSender<bool>, stalled_decode: & SyncSender<bool>,
+           reset_decode: &SyncSender<bool>) -> u32 {
+    
+    let instruction = decode_recv.recv().unwrap();    
+    let mut pc: Option<usize> = None;
+    let mut stalled = false;
+    let mut reset = false;
+    let wb = match exec_unit.branch_reset {
+        true => {
+            ExecuteResult::None
+        },
+        false => {
+            match instruction {
+                DecodedInstruction::Noop => ExecuteResult::None,
+                DecodedInstruction::Halt => ExecuteResult::Halt,
+                DecodedInstruction::Add(r, x, y) => ExecuteResult::Writeback(r, x + y),
+                DecodedInstruction::And(r, x, y) => ExecuteResult::Writeback(r, x & y),
+                DecodedInstruction::Blt(s, t, inst) => {
+                    if s < t {
+                        pc = Some(inst);
+                        reset = true;
+                    }
+                    ExecuteResult::None
+                },
+                DecodedInstruction::Beq(s, t, inst) => {
+                    if s == t {
+                        pc = Some(inst);
+                        reset = true;
+                    }
+                    ExecuteResult::None
+                }
+                DecodedInstruction::Div(r, x, y) => ExecuteResult::Writeback(r, x / y),
+                DecodedInstruction::J(inst) => {
+                    pc = Some(inst);
+                    reset = true;
+                    ExecuteResult::None
+                }
+                DecodedInstruction::Load(r, s) => ExecuteResult::Writeback(r, memory[s as usize]),
+                DecodedInstruction::Mod(d, s, t) => ExecuteResult::Writeback(d, s % t),
+                DecodedInstruction::Mov(d, s) => ExecuteResult::Writeback(d, s),
+                DecodedInstruction::Mult(r, x, y) => ExecuteResult::Writeback(r, x * y),
+                DecodedInstruction::Or(r, x, y) => ExecuteResult::Writeback(r, x | y),
+                DecodedInstruction::Sl(r, x, y) => ExecuteResult::Writeback(r, x << y),
+                DecodedInstruction::Sr(r, x, y) => ExecuteResult::Writeback(r, x >> y),
+                DecodedInstruction::Sub(r, x ,y) => ExecuteResult::Writeback(r, x - y),
+                DecodedInstruction::Store(t, s) => {
+                    memory[s as usize] = t;
+                    ExecuteResult::None
+                }
+                DecodedInstruction::Xor(r, x, y) => ExecuteResult::Writeback(r, x ^ y),
+            }
+        },
+    };
+    
+    println!("Execute result {:?}", wb);
+    wb_sender.send(wb).unwrap();
+    pc_sender.send(pc).unwrap();
+
+    //set the stalled signal for execute and decode
+    reset_decode.send(reset);
+    exec_unit.branch_reset = reset;
+
+    //set the stalled signal for fetch and decode
+    stalled_fetch.send(stalled);
+    stalled_decode.send(stalled);
+    if let DecodedInstruction::Halt = instruction {
+        return 0;
+    }
+    return 1;
+}
+
+fn writeback(registers: &mut Registers, wb_recv: &Receiver<ExecuteResult>) -> u32 {
+    let wb_res = wb_recv.recv().unwrap();
+    println!("WB RES: {:?}", wb_res);
+    match wb_res {
+        ExecuteResult::None => 1,
+        ExecuteResult::Halt => 0,
+        ExecuteResult::Writeback(register, value) => {
+            registers.gprs[register] = value;
+            1
+        },
+    }
+}
+
+struct ExecutionUnit{
+    reorderBuffer: ReorderBuffer,
+    branch_reset: bool,
+}
+
+impl ExecutionUnit {
+    fn new() -> ExecutionUnit {
+        ExecutionUnit {
+            reorderBuffer: ReorderBuffer::new(),
+            branch_reset: false,
+        }
+    }
 }
 
 struct Instructions {
@@ -115,133 +285,39 @@ impl Instructions {
     }
 }
 
-fn fetch(fetch_unit: &mut FetchUnit, instructions: &Instructions, pc_receiver: &Receiver<Option<usize>>, 
-         fetch_sender: &SyncSender<EncodedInstruction>) -> u32 {
-
-    let inst = instructions.get_instruction(fetch_unit.pc);
-    match pc_receiver.recv().unwrap() {
-        Some(addr) => fetch_unit.pc = addr,
-        None => fetch_unit.pc += 1,
-    };
-    
-    println!("pc: {}", fetch_unit.pc);
-    println!("Fetched instruction: {:?}", inst);
-    fetch_sender.send(inst).unwrap();
-    if let EncodedInstruction::Halt = inst {
-        return 0;
-    }
-    return 1;
+struct ReorderBuffer {
+    oldest: usize,
+    newest: usize,
+    buffer: [ExecuteResult; 16],
 }
 
-fn decode(registers: &mut Registers, fetch_recv: &Receiver<EncodedInstruction>, 
-          decoded_sender: &SyncSender<DecodedInstruction>, reg_wb_recv: &Receiver<ExecuteResult>) -> u32 {
-    
-    let instruction = fetch_recv.recv().unwrap();
-    if let ExecuteResult::Writeback(reg, res) = reg_wb_recv.recv().unwrap() {
-       registers.gprs[reg] = res;
+impl ReorderBuffer {
+    fn new() -> ReorderBuffer {
+        ReorderBuffer {
+            oldest: 0,
+            newest: 0,
+            buffer: [ExecuteResult::None ; 16],
+        }
     }
-        
-    let decoded = match instruction {
-        EncodedInstruction::Noop            => DecodedInstruction::Noop,
-        EncodedInstruction::Halt            => DecodedInstruction::Halt,
-        EncodedInstruction::Addi(d, s, imm) => DecodedInstruction::Add(d, registers.gprs[s], imm),  
-        EncodedInstruction::Add(d, s, t)    => DecodedInstruction::Add(d, registers.gprs[s], registers.gprs[t]),
-        EncodedInstruction::And(d, s, t)    => DecodedInstruction::And(d, registers.gprs[s], registers.gprs[t]),
-        EncodedInstruction::Andi(d, s, imm) => DecodedInstruction::And(d, registers.gprs[s], imm),
-        EncodedInstruction::Beq(s, t, inst) => DecodedInstruction::Beq(registers.gprs[s], registers.gprs[t], inst),
-        EncodedInstruction::Blt(s, t, inst) => DecodedInstruction::Blt(registers.gprs[s], registers.gprs[t], inst),
-        EncodedInstruction::Div(d, s, t)    => DecodedInstruction::Div(d, registers.gprs[s], registers.gprs[t]),
-        EncodedInstruction::J(inst)         => DecodedInstruction::J(inst),
-        EncodedInstruction::Ldc(d, imm)     => DecodedInstruction::Mov(d, imm),
-        EncodedInstruction::Li(d, imm)      => DecodedInstruction::Load(d, imm),
-        EncodedInstruction::Lw(d, t)        => DecodedInstruction::Load(d, registers.gprs[t]),
-        EncodedInstruction::Mod(d, s, t)    => DecodedInstruction::Mod(d, registers.gprs[s], registers.gprs[t]),
-        EncodedInstruction::Mov(d, s)       => DecodedInstruction::Mov(d, registers.gprs[s]),
-        EncodedInstruction::Mult(d, s, t)   => DecodedInstruction::Mult(d, registers.gprs[s], registers.gprs[t]),
-        EncodedInstruction::Or(d, s, t)     => DecodedInstruction::Or(d, registers.gprs[s], registers.gprs[t]),
-        EncodedInstruction::Sl(d, s, t)     => DecodedInstruction::Sl(d, registers.gprs[s], t),
-        EncodedInstruction::Sr(d, s, t)     => DecodedInstruction::Sr(d, registers.gprs[s], t),
-        EncodedInstruction::Sub(d, s, t)    => DecodedInstruction::Sub(d, registers.gprs[s], registers.gprs[t]),
-        EncodedInstruction::Subi(d, s, imm) => DecodedInstruction::Sub(d, registers.gprs[s], imm),
-        EncodedInstruction::Si(t, imm)      => DecodedInstruction::Store(registers.gprs[t], imm),
-        EncodedInstruction::Sw(s, d)        => DecodedInstruction::Store(registers.gprs[s], registers.gprs[d]),
-        EncodedInstruction::Xor(d, s, t)    => DecodedInstruction::Xor(d, registers.gprs[s], registers.gprs[t]),
-        // _ => {
-        //     panic!("{:?} is an unimplemented instruction", instruction);
-        //     EncodedInstruction::Noop
-        // }
-    };
-    println!("Decoded instruction: {:?}", decoded);
-    decoded_sender.send(decoded).unwrap();
-    
-    if let DecodedInstruction::Halt = decoded {
-        return 0;
-    }
-    return 1;
-}
 
-fn execute(memory: &mut [u32; MEM_SIZE], pc_sender: &SyncSender<Option<usize>>, 
-           decode_recv: &Receiver<DecodedInstruction>, wb_sender: &SyncSender<ExecuteResult>) -> u32 {
-    
-    let instruction = decode_recv.recv().unwrap();    
-    let mut pc: Option<usize> = None;
-    let wb = match instruction {
-        DecodedInstruction::Noop => ExecuteResult::None,
-        DecodedInstruction::Halt => ExecuteResult::Halt,
-        DecodedInstruction::Add(r, x, y) => ExecuteResult::Writeback(r, x + y),
-        DecodedInstruction::And(r, x, y) => ExecuteResult::Writeback(r, x & y),
-        DecodedInstruction::Blt(s, t, inst) => {
-            if s < t {
-                pc = Some(inst);
-            }
-            ExecuteResult::None
-        },
-        DecodedInstruction::Beq(s, t, inst) => {
-            if s == t {
-                pc = Some(inst);
-            }
-            ExecuteResult::None
-        }
-        DecodedInstruction::Div(r, x, y) => ExecuteResult::Writeback(r, x / y),
-        DecodedInstruction::J(inst) => {
-            pc = Some(inst);
-            ExecuteResult::None
-        }
-        DecodedInstruction::Load(r, s) => ExecuteResult::Writeback(r, memory[s as usize]),
-        DecodedInstruction::Mod(d, s, t) => ExecuteResult::Writeback(d, s % t),
-        DecodedInstruction::Mov(d, s) => ExecuteResult::Writeback(d, s),
-        DecodedInstruction::Mult(r, x, y) => ExecuteResult::Writeback(r, x * y),
-        DecodedInstruction::Or(r, x, y) => ExecuteResult::Writeback(r, x | y),
-        DecodedInstruction::Sl(r, x, y) => ExecuteResult::Writeback(r, x << y),
-        DecodedInstruction::Sr(r, x, y) => ExecuteResult::Writeback(r, x >> y),
-        DecodedInstruction::Sub(r, x ,y) => ExecuteResult::Writeback(r, x - y),
-        DecodedInstruction::Store(t, s) => {
-            memory[s as usize] = t;
-            ExecuteResult::None
-        }
-        DecodedInstruction::Xor(r, x, y) => ExecuteResult::Writeback(r, x ^ y),
-    };
-    println!("Execute result {:?}", wb);
-    wb_sender.send(wb).unwrap();
-    pc_sender.send(pc).unwrap();
-    if let DecodedInstruction::Halt = instruction {
-        return 0;
+    fn get_new_pos(&mut self) -> usize {
+        let ret = self.newest;
+        self.newest = (self.newest + 1) % self.buffer.len();
+        ret
     }
-    return 1;
-}
 
-fn writeback(wb_recv: &Receiver<ExecuteResult>, reg_writer: &SyncSender<ExecuteResult>) -> u32 {
-    let wb_res = wb_recv.recv().unwrap();
-    println!("WB RES: {:?}", wb_res);
-    reg_writer.send(wb_res).unwrap();
-    if let ExecuteResult::Halt = wb_res {
-        return 0;
-    }
-    return 1;
 }
 
 struct FetchUnit {
     pc: usize,
+}
+
+impl FetchUnit {
+    fn new() -> FetchUnit {
+        FetchUnit {
+            pc: 0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
