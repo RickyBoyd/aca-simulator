@@ -54,7 +54,7 @@ fn main() {
         println!("");
         cycles += 1;
         println!("{:?}", cpu);
-        if i > 20 {
+        if i > 40 {
             break;
         }
         i += 1;
@@ -196,6 +196,13 @@ fn decode(cpu: &mut CPU) {
                                 },
                                 EncodedInstruction::Mult(d, s, t)   => {
                                     //DecodedInstruction::Mult(d, registers.read_reg(s), registers.read_reg(t))
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let operand1 = cpu.read_reg(s, r);
+                                        let operand2 = cpu.read_reg(t, r);
+                                        cpu.registers.set_owner(d, r);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Mult, r, d);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
                                 },
                                 EncodedInstruction::Or(d, s, t)     => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -284,13 +291,15 @@ fn execute(cpu: &mut CPU)  {
         if cpu.exec_unit.rs_sts[rs].ready && !cpu.exec_unit.rs_sts[rs].finished && !cpu.exec_unit.rs_sts[rs].executing {
             //try to dipatch to functional unit
             for fu in &mut cpu.exec_unit.func_units {
-                if !fu.is_busy() && fu.can_dispatch(cpu.exec_unit.rs_sts[rs].operation) {
+                if !fu.is_busy() {
                     if let Operand::Value(x) = cpu.exec_unit.rs_sts[rs].o1 {
                         if let Operand::Value(y) = cpu.exec_unit.rs_sts[rs].o2 {
                             println!("Dispatching {} = {} {:?} {} from {}", cpu.exec_unit.rs_sts[rs].wb_reg, x, cpu.exec_unit.rs_sts[rs].operation,y, rs );
-                            fu.dispatch(x, y, cpu.exec_unit.rs_sts[rs].operation, rs, cpu.exec_unit.rs_sts[rs].wb_reg);
-                            cpu.exec_unit.rs_sts[rs].executing = true;
-                            break; //found a functional unit to execute this RS in
+                            if fu.dispatch(x, y, cpu.exec_unit.rs_sts[rs].operation, rs, cpu.exec_unit.rs_sts[rs].wb_reg) {
+                                cpu.exec_unit.rs_sts[rs].executing = true;
+                                break; //found a functional unit to execute this RS 
+                            }
+                           
                         }
                     }
                     
@@ -453,33 +462,33 @@ impl DecodeUnit {
     }
 }
 
-trait FunctionalUnit {
-    fn can_dispatch(&self, operation: Op) -> bool;
-    fn dispatch(&mut self, o1: u32, o2: u32, operation: Op, rs: usize, reg: usize);
-    fn cycle(&mut self);
-    fn is_finished(&self) -> bool;
-    fn get_result(&self) -> Option<(u32, usize, usize)>;
-    fn is_busy(&self) -> bool;
-    fn update_busy(&mut self);
-    fn free(&mut self);
-}
+// trait FunctionalUnit {
+//     fn can_dispatch(&self, operation: Op) -> bool;
+//     fn dispatch(&mut self, o1: u32, o2: u32, operation: Op, rs: usize, reg: usize);
+//     fn cycle(&mut self);
+//     fn is_finished(&self) -> bool;
+//     fn get_result(&self) -> Option<(u32, usize, usize)>;
+//     fn is_busy(&self) -> bool;
+//     fn update_busy(&mut self);
+//     fn free(&mut self);
+// }
 
 struct ExecUnit {
-    func_units: Vec<Box<FunctionalUnit>>,
+    func_units: Vec<FunctionalUnit>,
     rs_sts: Vec<ReservationStation>,
 }
 
 impl fmt::Debug for ExecUnit {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Reservation Stations {:?}", self.rs_sts)
+        write!(f, "Reservation Stations {:?}\nFunctional Units: {:?}", self.rs_sts, self.func_units)
     }
 }
 
 impl ExecUnit {
     fn new() -> ExecUnit {
-        let alu = Box::new(ALU::new());
-        let alu2 = Box::new(ALU::new());
-        let mut fus: Vec<Box<FunctionalUnit>> = Vec::new();
+        let alu = FunctionalUnit::new(FUType::ALU);
+        let alu2 = FunctionalUnit::new(FUType::Multiplier);
+        let mut fus: Vec<FunctionalUnit> = Vec::new();
         fus.push(alu);
         fus.push(alu2);
         let mut rs_sts: Vec<ReservationStation> = vec![ReservationStation::new(), ReservationStation::new()];
@@ -512,10 +521,19 @@ enum Op {
     Sub,
     Xor,
     Load,
+    Mult,
+    Div,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum FUType {
+    Multiplier,
+    ALU,
 }
 
 #[derive(Debug)]
-struct ALU {
+struct FunctionalUnit {
+    fu_type: FUType,
     is_busy: bool,
     op1: u32,
     op2: u32,
@@ -526,9 +544,10 @@ struct ALU {
     reg_wb: usize,
 }
 
-impl ALU {
-    fn new() -> ALU {
-        ALU {
+impl FunctionalUnit {
+    fn new(fu_type: FUType) -> FunctionalUnit {
+        FunctionalUnit {
+            fu_type: fu_type,
             is_busy: false,
             op1: 0,
             op2: 0,
@@ -539,65 +558,103 @@ impl ALU {
             reg_wb: 0,
         }
     }
-}
 
-impl FunctionalUnit for ALU {
-    fn can_dispatch(&self, operation: Op) -> bool {
-        match operation {
-            Op::Add => {
-                true
+    fn dispatch(&mut self, o1: u32, o2: u32, operation: Op, rs: usize, reg: usize) -> bool {
+        let correct_type = match self.fu_type {
+            FUType::ALU => {
+                match operation {
+                    Op::Add => {
+                        self.cycles = 1;
+                        true
+                    },
+                    Op::And => {
+                        self.cycles = 1;
+                        true
+                    },
+                    Op::Or => {
+                        self.cycles = 1;
+                        true
+                    },
+                    Op::Sub => {
+                        self.cycles = 1;
+                        true
+                    }
+                    Op::Xor => {
+                        self.cycles = 1;
+                        true
+                    }
+                    _ => {
+                        self.cycles = 1;
+                        false
+                    }
+                }
             },
-            Op::And => {
-                true
-            },
-            Op::Or => {
-                true
-            },
-            Op::Sub => {
-                true
+            FUType::Multiplier => {
+                match operation {
+                    Op::Mult => {
+                        self.cycles = 2;
+                        true
+                    },
+                    Op::Div => {
+                        self.cycles = 3;
+                        true
+                    },
+                    _ => false,
+                }
             }
-            Op::Xor => {
-                true
-            }
-            _ => {
-                false
-            }
+        };
+        if correct_type {
+            self.op1 = o1;
+            self.op2 = o2;
+            self.operation = operation;
+            self.reg_wb = reg;
+            self.rs_executing = rs;
         }
-    }
-
-    fn dispatch(&mut self, o1: u32, o2: u32, operation: Op, rs: usize, reg: usize) {
-        self.op1 = o1;
-        self.op2 = o2;
-        self.operation = operation;
-        self.reg_wb = reg;
-        self.rs_executing = rs;
-        self.cycles = 1;
+        return correct_type;
     }
 
     fn cycle(&mut self) {
         if self.cycles > 0 {
             self.cycles -= 1;
             if self.cycles == 0 {
-                self.result = match self.operation {
-                    Op::Add => {
-                        Some(self.op1 + self.op2)  
+                self.result = match self.fu_type {
+                    FUType::ALU => {
+                        match self.operation {
+                            Op::Add => {
+                                Some(self.op1 + self.op2)  
+                            },
+                            Op::And => {
+                                Some(self.op1 & self.op2)
+                            },
+                            Op::Or => {
+                                Some(self.op1 | self.op2)
+                            },
+                            Op::Sub => {
+                                Some(self.op1 - self.op2)
+                            },
+                            Op::Xor => {
+                                Some(self.op1 ^ self.op2)
+                            },
+                            _ => {
+                                panic!("Not an ALU operation {:?}", self.operation);
+                            },
+                        }
                     },
-                    Op::And => {
-                        Some(self.op1 & self.op2)
+                    FUType::Multiplier => {
+                        match self.operation {
+                            Op::Div => {
+                                Some(self.op1 / self.op2)
+                            },
+                            Op::Mult => {
+                                Some(self.op1 * self.op2)
+                            },
+                            _ => {
+                                panic!("Not a MULTIPLIER operation {:?}", self.operation);
+                            },
+                        }
                     },
-                    Op::Or => {
-                        Some(self.op1 | self.op2)
-                    },
-                    Op::Sub => {
-                        Some(self.op1 - self.op2)
-                    }
-                    Op::Xor => {
-                        Some(self.op1 ^ self.op2)
-                    }
-                    _ => {
-                        panic!("Not an ALU operation {:?}", self.operation);
-                    }
                 };
+                
             }
         }
     }
