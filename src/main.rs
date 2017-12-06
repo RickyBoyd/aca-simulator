@@ -2,9 +2,8 @@ use std::io::prelude::*;
 use std::io::BufReader;
 use std::fs::File;
 use std::env;
-use std::sync::mpsc::sync_channel;
-use std::sync::mpsc::SyncSender;
-use std::sync::mpsc::Receiver;
+use std::collections::LinkedList;
+use std::fmt;
 
 
 const MEM_SIZE: usize = 52;
@@ -21,88 +20,72 @@ fn main() {
 
     let instructions = assemble(assembly);
 
-    let num_instructions = instructions.instructions.len();
+    let num_instructions = instructions.len();
 
-    // for i in instructions.iter() {
-    //     println!("{:?}", i);
-    // }
+    //let mut memory: [u32; MEM_SIZE] = [1; MEM_SIZE];
 
-    let mut memory: [u32; MEM_SIZE] = [1; MEM_SIZE];
-
-    let mut regs = Registers{ gprs: [0; 32]};
-
-    //Send pc from execute to fetch + control value with Optional None -> 0
-    let (pc_sender_e, pc_recv_f) = sync_channel::<Option<usize>>(1);
-
-    //need a channel from fetch -> decode
-    let (fetch_sender, fetch_recv) = sync_channel::<EncodedInstruction>(1);
-
-    //need a channel from decode -> execute
-    let (decode_sender, decode_recv) = sync_channel::<DecodedInstruction>(1);
-
-    //need a channel from execute -> wb
-    let (wb_sender, wb_recv) = sync_channel::<ExecuteResult>(1);
-
-    //Channel to signal stalled or not to fetch
-    let (stalled_f_sender, stalled_f_recv) = sync_channel::<bool>(1);
-    let (stalled_d_sender, stalled_d_recv) = sync_channel::<bool>(1);
-
-    //Channel for setting reset signal for decode stage
-    let (reset_d_sender, reset_d_recv) = sync_channel::<bool>(2);
-
-    //Need to put initial values into inter stage channels plus signal channels
-    fetch_sender.send(EncodedInstruction::Noop).unwrap();
-    decode_sender.send(DecodedInstruction::Noop).unwrap();
-    wb_sender.send(ExecuteResult::None).unwrap();
-    reset_d_sender.send(false).unwrap();
+    let mut cpu = CPU::new(instructions);
 
     let mut cycles = 0;
-    let mut fetch_unit = FetchUnit::new();
-    let mut exec_unit = ExecutionUnit::new();
 
+    // loop {
+    //     let w_res = writeback(&mut cpu);
+    //     let e_res = execute(&mut cpu);
+    //     let d_res = decode(&mut cpu);
+    //     let f_res = fetch(&mut cpu);
+    //     println!("CYCLE");
+    //     println!("");
+    //     cycles += 1;
+    //     if (w_res + e_res + d_res + f_res) == 0 {
+    //         break;
+    //     }
+    // }
+    //finish off last three cycles
+    let mut i = 0;
     loop {
-        let w_res = writeback(&mut regs, &wb_recv);
-        let e_res = execute(&mut exec_unit,&mut memory, &pc_sender_e, &decode_recv, 
-                            &wb_sender, &stalled_f_sender, &stalled_d_sender, &reset_d_sender);
-
-        let d_res = decode(regs, &fetch_recv, &decode_sender, &stalled_d_recv, &reset_d_recv);
-        let f_res = fetch(&mut fetch_unit, &instructions, &pc_recv_f, &fetch_sender, &stalled_f_recv);
+        writeback(&mut cpu);
+        println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
+        execute(&mut cpu);
+        println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
+        decode(&mut cpu);
+        println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
+        fetch(&mut cpu);
         println!("CYCLE");
         println!("");
         cycles += 1;
-        if (w_res + e_res + d_res + f_res) == 0 {
+        println!("{:?}", cpu);
+        if i > 20 {
             break;
         }
+        i += 1;
     }
-    //finish off last three cycles
     println!("here1");
 
     cycles += 3;
-    println!("{:?}", regs);
+    println!("{:?}", cpu.registers.gprs);
     println!("Instructions executed: {}", num_instructions);
     println!("Number of cycles: {}", cycles);
-    println!("Instructions per cycle: {}", num_instructions as f32  / cycles as f32);
+    println!("Instructions per cycle: {}", (num_instructions as f32)  / (cycles as f32));
     //println!("End: {:?}", regs);
     //for i in 0..30 {
     //    println!("MEM[{}]: {}", i, memory[i]);
     //}
 }
 
-fn fetch(fetch_unit: &mut FetchUnit, instructions: &Instructions, pc_receiver: &Receiver<Option<usize>>, 
-         fetch_sender: &SyncSender<EncodedInstruction>, stalled: &Receiver<bool>) -> u32 {
+fn fetch(cpu: &mut CPU) -> u32 {
 
-    match stalled.recv().unwrap() {
+    match cpu.fetch_unit.stalled {
         true => 1,
         false => {
-            let inst = instructions.get_instruction(fetch_unit.pc);
-            match pc_receiver.recv().unwrap() {
-                Some(addr) => fetch_unit.pc = addr,
-                None => fetch_unit.pc += 1,
+            let inst = cpu.fetch_unit.get_instruction();
+            match cpu.fetch_unit.get_exec_pc() {
+                Some(addr) => cpu.fetch_unit.pc = addr,
+                None => cpu.fetch_unit.pc += 1,
             };
     
-            println!("pc: {}", fetch_unit.pc);
+            println!("pc: {}", cpu.fetch_unit.pc);
             println!("Fetched instruction: {:?}", inst);
-            fetch_sender.send(inst).unwrap();
+            cpu.decode_unit.add_instruction(inst);
             if let EncodedInstruction::Halt = inst {
                 0
             }
@@ -111,180 +94,327 @@ fn fetch(fetch_unit: &mut FetchUnit, instructions: &Instructions, pc_receiver: &
             }
         }
     }
-
-    
 }
 
-fn decode(registers: Registers, fetch_recv: &Receiver<EncodedInstruction>, 
-          decoded_sender: &SyncSender<DecodedInstruction>, stalled: &Receiver<bool>,
-          reset: &Receiver<bool>) -> u32 {
-    
-    match stalled.recv().unwrap() {
-        true => 1,
-        false => {
-            let instruction = fetch_recv.recv().unwrap();
-            let decoded = match reset.recv().unwrap() {
-                true => {
-                    DecodedInstruction::Noop
-                },
-                false => {
-                    match instruction {
-                        EncodedInstruction::Noop            => DecodedInstruction::Noop,
-                        EncodedInstruction::Halt            => DecodedInstruction::Halt,
-                        EncodedInstruction::Addi(d, s, imm) => DecodedInstruction::Add(d, registers.gprs[s], imm),  
-                        EncodedInstruction::Add(d, s, t)    => DecodedInstruction::Add(d, registers.gprs[s], registers.gprs[t]),
-                        EncodedInstruction::And(d, s, t)    => DecodedInstruction::And(d, registers.gprs[s], registers.gprs[t]),
-                        EncodedInstruction::Andi(d, s, imm) => DecodedInstruction::And(d, registers.gprs[s], imm),
-                        EncodedInstruction::Beq(s, t, inst) => DecodedInstruction::Beq(registers.gprs[s], registers.gprs[t], inst),
-                        EncodedInstruction::Blt(s, t, inst) => DecodedInstruction::Blt(registers.gprs[s], registers.gprs[t], inst),
-                        EncodedInstruction::Div(d, s, t)    => DecodedInstruction::Div(d, registers.gprs[s], registers.gprs[t]),
-                        EncodedInstruction::J(inst)         => DecodedInstruction::J(inst),
-                        EncodedInstruction::Ldc(d, imm)     => DecodedInstruction::Mov(d, imm),
-                        EncodedInstruction::Li(d, imm)      => DecodedInstruction::Load(d, imm),
-                        EncodedInstruction::Lw(d, t)        => DecodedInstruction::Load(d, registers.gprs[t]),
-                        EncodedInstruction::Mod(d, s, t)    => DecodedInstruction::Mod(d, registers.gprs[s], registers.gprs[t]),
-                        EncodedInstruction::Mov(d, s)       => DecodedInstruction::Mov(d, registers.gprs[s]),
-                        EncodedInstruction::Mult(d, s, t)   => DecodedInstruction::Mult(d, registers.gprs[s], registers.gprs[t]),
-                        EncodedInstruction::Or(d, s, t)     => DecodedInstruction::Or(d, registers.gprs[s], registers.gprs[t]),
-                        EncodedInstruction::Sl(d, s, t)     => DecodedInstruction::Sl(d, registers.gprs[s], t),
-                        EncodedInstruction::Sr(d, s, t)     => DecodedInstruction::Sr(d, registers.gprs[s], t),
-                        EncodedInstruction::Sub(d, s, t)    => DecodedInstruction::Sub(d, registers.gprs[s], registers.gprs[t]),
-                        EncodedInstruction::Subi(d, s, imm) => DecodedInstruction::Sub(d, registers.gprs[s], imm),
-                        EncodedInstruction::Si(t, imm)      => DecodedInstruction::Store(registers.gprs[t], imm),
-                        EncodedInstruction::Sw(s, d)        => DecodedInstruction::Store(registers.gprs[s], registers.gprs[d]),
-                        EncodedInstruction::Xor(d, s, t)    => DecodedInstruction::Xor(d, registers.gprs[s], registers.gprs[t]),
-                        // _ => {
-                        //     panic!("{:?} is an unimplemented instruction", instruction);
-                        //     EncodedInstruction::Noop
-                        // }
-                    }
-                },
-            };
-            println!("Decoded instruction: {:?}", decoded);
-            decoded_sender.send(decoded).unwrap();
-            if let DecodedInstruction::Halt = decoded {
-                0
-            } else {
-                1
-            }
-        },
-    }
-}
-
-fn execute(exec_unit: &mut ExecutionUnit, memory: &mut [u32; MEM_SIZE], pc_sender: &SyncSender<Option<usize>>, 
-           decode_recv: &Receiver<DecodedInstruction>, wb_sender: &SyncSender<ExecuteResult>,
-           stalled_fetch: &SyncSender<bool>, stalled_decode: & SyncSender<bool>,
-           reset_decode: &SyncSender<bool>) -> u32 {
-    
-    let instruction = decode_recv.recv().unwrap();    
-    let reorder_buffer_pos = exec_unit.reorder_buffer.get_new_pos();
-    let mut pc: Option<usize> = None;
-    let mut stalled = false;
-    let mut reset = false;
-    let wb = match exec_unit.branch_reset {
+fn decode(cpu: &mut CPU) {
+    match cpu.decode_unit.stalled {
         true => {
-            ExecuteResult::None
+            // do nothing for now
         },
         false => {
-            match instruction {
-                DecodedInstruction::Noop => ExecuteResult::None,
-                DecodedInstruction::Halt => ExecuteResult::Halt,
-                DecodedInstruction::Add(r, x, y) => ExecuteResult::Writeback(r, x + y),
-                DecodedInstruction::And(r, x, y) => ExecuteResult::Writeback(r, x & y),
-                DecodedInstruction::Blt(s, t, inst) => {
-                    if s < t {
-                        pc = Some(inst);
-                        reset = true;
-                    }
-                    ExecuteResult::None
+            let possible_instruction = cpu.decode_unit.get_next_instruction();
+            match possible_instruction {
+                Some(instruction) => {
+                    let reset = cpu.decode_unit.reset;
+                    match reset {
+                        true => {
+                            cpu.decode_unit.reset = false;
+                            //TODO properly implement reset
+                        },
+                        false => {
+                            match instruction {
+                                EncodedInstruction::Noop            => {
+                                    cpu.decode_unit.pop_instruction();
+                                }
+                                EncodedInstruction::Halt            => {
+                                    //set decode to finished
+                                },
+                                EncodedInstruction::Addi(d, s, imm) => {
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let operand1 = cpu.read_reg(s, r);
+                                        let operand2 = Operand::Value(imm);
+                                        cpu.registers.set_owner(d, r);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Add, r, d);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
+                                    else {
+                                        // do nothing until next cycle
+                                    }
+                                },
+                                EncodedInstruction::Add(d, s, t)    => {
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let operand1 = cpu.read_reg(s, r);
+                                        let operand2 = cpu.read_reg(t, r);
+                                        cpu.registers.set_owner(d, r);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Add, r, d);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
+                                    else {
+                                        // do nothing until next cycle
+                                    }
+                                },
+                                EncodedInstruction::And(d, s, t)    => {
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let operand1 = cpu.read_reg(s, r);
+                                        let operand2 = cpu.read_reg(t, r);
+                                        cpu.registers.set_owner(d, r);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::And, r, d);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
+                                    else {
+                                        // do nothing until next cycle
+                                    }
+                                },
+                                EncodedInstruction::Andi(d, s, imm) => {
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let operand1 = cpu.read_reg(s, r);
+                                        let operand2 = Operand::Value(imm);
+                                        cpu.registers.set_owner(d, r);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::And, r, d);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
+                                    else {
+                                        // do nothing until next cycle
+                                    }
+                                },
+                                EncodedInstruction::Beq(s, t, inst) => {
+                                    //DecodedInstruction::Beq(registers.read_reg(s), registers.read_reg(t), inst)
+                                },
+                                EncodedInstruction::Blt(s, t, inst) => {
+                                    //DecodedInstruction::Blt(registers.read_reg(s), registers.read_reg(t), inst)
+                                },
+                                EncodedInstruction::Div(d, s, t)    => {
+                                    //DecodedInstruction::Div(d, registers.read_reg(s), registers.read_reg(t))
+                                },
+                                EncodedInstruction::J(inst)         => {
+                                    //DecodedInstruction::J(inst)
+                                },
+                                EncodedInstruction::Ldc(d, imm)     => {
+                                    //DecodedInstruction::Mov(d, imm)
+                                },
+                                EncodedInstruction::Li(d, imm)      => {
+                                    //DecodedInstruction::Load(d, imm)
+                                },
+                                EncodedInstruction::Lw(d, t)        => {
+                                    //DecodedInstruction::Load(d, registers.read_reg(t))
+                                },
+                                EncodedInstruction::Mod(d, s, t)    => {
+                                    //DecodedInstruction::Mod(d, registers.read_reg(s), registers.read_reg(t))
+                                },
+                                EncodedInstruction::Mov(d, s)       => {
+                                    //DecodedInstruction::Mov(d, registers.read_reg(s))
+                                },
+                                EncodedInstruction::Mult(d, s, t)   => {
+                                    //DecodedInstruction::Mult(d, registers.read_reg(s), registers.read_reg(t))
+                                },
+                                EncodedInstruction::Or(d, s, t)     => {
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let operand1 = cpu.read_reg(s, r);
+                                        let operand2 = cpu.read_reg(t, r);
+                                        cpu.registers.set_owner(d, r);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Or, r, d);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
+                                    else {
+                                        // do nothing until next cycle
+                                    }
+                                },
+                                EncodedInstruction::Sl(d, s, t)     => {
+                                    //DecodedInstruction::Sl(d, registers.read_reg(s), t)
+                                },
+                                EncodedInstruction::Sr(d, s, t)     => {
+                                    //DecodedInstruction::Sr(d, registers.read_reg(s), t)
+                                },
+                                EncodedInstruction::Sub(d, s, t)    => {
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let operand1 = cpu.read_reg(s, r);
+                                        let operand2 = cpu.read_reg(t, r);
+                                        cpu.registers.set_owner(d, r);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Sub, r, d);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
+                                    else {
+                                        // do nothing until next cycle
+                                    }
+                                },
+                                EncodedInstruction::Subi(d, s, imm) => {
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let operand1 = cpu.read_reg(s,r);
+                                        let operand2 = Operand::Value(imm);
+                                        cpu.registers.set_owner(d, r);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Sub, r, d);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
+                                    else {
+                                        // do nothing until next cycle
+                                    }
+                                },
+                                EncodedInstruction::Si(t, imm)      => {
+                                    //DecodedInstruction::Store(registers.read_reg(t), imm)
+                                },
+                                EncodedInstruction::Sw(s, d)        => {
+                                    //DecodedInstruction::Store(registers.read_reg(s), registers.read_reg(d))
+                                },
+                                EncodedInstruction::Xor(d, s, t)    => {
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let operand1 = cpu.read_reg(s, r);
+                                        let operand2 = cpu.read_reg(t, r);
+                                        cpu.registers.set_owner(d, r);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Xor, r, d);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
+                                    else {
+                                        // do nothing until next cycle
+                                    }
+                                },
+                                // _ => {
+                                //     panic!("{:?} is an unimplemented instruction", instruction);
+                                //     EncodedInstruction::Noop
+                                // }
+                            }
+                        },
+                    };
                 },
-                DecodedInstruction::Beq(s, t, inst) => {
-                    if s == t {
-                        pc = Some(inst);
-                        reset = true;
-                    }
-                    ExecuteResult::None
-                }
-                DecodedInstruction::Div(r, x, y) => ExecuteResult::Writeback(r, x / y),
-                DecodedInstruction::J(inst) => {
-                    pc = Some(inst);
-                    reset = true;
-                    ExecuteResult::None
-                }
-                DecodedInstruction::Load(r, s) => ExecuteResult::Writeback(r, memory[s as usize]),
-                DecodedInstruction::Mod(d, s, t) => ExecuteResult::Writeback(d, s % t),
-                DecodedInstruction::Mov(d, s) => ExecuteResult::Writeback(d, s),
-                DecodedInstruction::Mult(r, x, y) => ExecuteResult::Writeback(r, x * y),
-                DecodedInstruction::Or(r, x, y) => ExecuteResult::Writeback(r, x | y),
-                DecodedInstruction::Sl(r, x, y) => ExecuteResult::Writeback(r, x << y),
-                DecodedInstruction::Sr(r, x, y) => ExecuteResult::Writeback(r, x >> y),
-                DecodedInstruction::Sub(r, x ,y) => ExecuteResult::Writeback(r, x - y),
-                DecodedInstruction::Store(t, s) => {
-                    memory[s as usize] = t;
-                    ExecuteResult::None
-                }
-                DecodedInstruction::Xor(r, x, y) => ExecuteResult::Writeback(r, x ^ y),
-            }
+                None => (),
+            };
         },
     };
-    
-    println!("Execute result {:?}", wb);
-    exec_unit.reorder_buffer.insert(reorder_buffer_pos, wb);
-    println!("{:?}", exec_unit.reorder_buffer);
-    wb_sender.send(exec_unit.reorder_buffer.get_writeback()).unwrap();
-    println!("{:?}", exec_unit.reorder_buffer);
-    pc_sender.send(pc).unwrap();
-
-    //set the stalled signal for execute and decode
-    reset_decode.send(reset).unwrap();
-    exec_unit.branch_reset = reset;
-
-    //set the stalled signal for fetch and decode
-    stalled_fetch.send(stalled).unwrap();
-    stalled_decode.send(stalled).unwrap();
-    if let DecodedInstruction::Halt = instruction {
-        0
-    }
-    else {
-        1
-    }
 }
 
-fn writeback(registers: &mut Registers, wb_recv: &Receiver<ExecuteResult>) -> u32 {
-    let wb_res = wb_recv.recv().unwrap();
-    println!("WB RES: {:?}", wb_res);
-    match wb_res {
-        ExecuteResult::None => 1,
-        ExecuteResult::Halt => 0,
-        ExecuteResult::Writeback(register, value) => {
-            registers.gprs[register] = value;
-            1
-        },
+fn execute(cpu: &mut CPU)  {
+
+    //execute 
+    println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
+    for fu in &mut cpu.exec_unit.func_units {
+        fu.cycle();
     }
-}
-
-struct ExecutionUnit {
-    reorder_buffer: ReorderBuffer,
-    branch_reset: bool,
-}
-
-impl ExecutionUnit {
-    fn new() -> ExecutionUnit {
-        ExecutionUnit {
-            reorder_buffer: ReorderBuffer::new(),
-            branch_reset: false,
+    println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
+    //now dispatch
+    for rs in 0..cpu.exec_unit.rs_sts.len() {
+        if cpu.exec_unit.rs_sts[rs].ready && !cpu.exec_unit.rs_sts[rs].finished && !cpu.exec_unit.rs_sts[rs].executing {
+            //try to dipatch to functional unit
+            for fu in &mut cpu.exec_unit.func_units {
+                if !fu.is_busy() && fu.can_dispatch(cpu.exec_unit.rs_sts[rs].operation) {
+                    if let Operand::Value(x) = cpu.exec_unit.rs_sts[rs].o1 {
+                        if let Operand::Value(y) = cpu.exec_unit.rs_sts[rs].o2 {
+                            println!("Dispatching {} = {} {:?} {} from {}", cpu.exec_unit.rs_sts[rs].wb_reg, x, cpu.exec_unit.rs_sts[rs].operation,y, rs );
+                            fu.dispatch(x, y, cpu.exec_unit.rs_sts[rs].operation, rs, cpu.exec_unit.rs_sts[rs].wb_reg);
+                            cpu.exec_unit.rs_sts[rs].executing = true;
+                            break; //found a functional unit to execute this RS in
+                        }
+                    }
+                    
+                }
+            }
         }
     }
+
 }
 
-struct Instructions {
+fn writeback(cpu: &mut CPU) {
+    cpu.cdb_busy = false;
+
+    for rs in 0..cpu.exec_unit.rs_sts.len() {
+        if cpu.exec_unit.rs_sts[rs].finished {
+            cpu.exec_unit.rs_sts[rs].free();
+        }
+        cpu.exec_unit.rs_sts[rs].update_ready()
+    }
+
+    for fu in 0..cpu.exec_unit.func_units.len() {
+        cpu.exec_unit.func_units[fu].update_busy();
+        println!("FU BUSY: {:?}", cpu.exec_unit.func_units[fu].get_result());
+    }
+
+
+    for fu in 0..cpu.exec_unit.func_units.len() {
+        if let Some((result, register, rs)) = cpu.exec_unit.func_units[fu].get_result() {
+            if !cpu.cdb_busy {
+                println!("WRITING BACK: {}, {}, {}", result, register, rs);
+                cpu.cdb_busy = true;
+                let deps = cpu.exec_unit.rs_sts[rs].dependents.clone();
+                for dependent in deps {
+                    if let Operand::ReservationStation(r) = cpu.exec_unit.rs_sts[dependent].o1 {
+                        if rs == r {
+                            cpu.exec_unit.rs_sts[dependent].o1 = Operand::Value(result);
+                            cpu.exec_unit.rs_sts[dependent].ready = false;
+                        }
+                    }
+                    if let Operand::ReservationStation(r) = cpu.exec_unit.rs_sts[dependent].o2 {
+                        if rs == r {
+                            cpu.exec_unit.rs_sts[dependent].o2 = Operand::Value(result);
+                            cpu.exec_unit.rs_sts[dependent].ready = false;
+                        }
+                    }
+                }
+                cpu.registers.write_result(result, register, rs);
+                cpu.exec_unit.func_units[fu].free();
+                println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
+                cpu.exec_unit.rs_sts[rs].finished = true;
+            }
+        }
+    }
+    println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
+}
+
+struct CPU {
+    fetch_unit: FetchUnit,
+    decode_unit: DecodeUnit,
+    exec_unit: ExecUnit,
+    cdb_busy: bool,
+    registers: Registers,
+}
+
+impl fmt::Debug for CPU {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "cdb_busy {:}\n Fetch unit: {:?}\nDecode Unit: {:?}\nExec Unit: {:?}\nRegisters: {:?}\n", self.cdb_busy, self.fetch_unit, self.decode_unit, self.exec_unit, self.registers)
+    }
+}
+
+impl CPU {
+    fn new(instructions: Vec<EncodedInstruction>) -> CPU {
+        CPU {
+            fetch_unit: FetchUnit::new(instructions),
+            decode_unit: DecodeUnit::new(),
+            exec_unit: ExecUnit::new(),
+            cdb_busy: false,
+            registers: Registers::new(),
+        }
+    }
+
+    fn read_reg(&mut self, reg: usize, rs: usize) -> Operand {
+        match self.registers.rat[reg] {
+            None => {
+                Operand::Value(self.registers.gprs[reg])
+            }
+            Some(reservation) => {
+                self.exec_unit.rs_sts[reservation].add_dependent(rs);
+                Operand::ReservationStation(reservation)
+            }
+        }
+    }
+
+}
+
+#[derive(Debug)]
+struct FetchUnit {
+    pc: usize,
+    exec_pc: Option<usize>,
     instructions: Vec<EncodedInstruction>,
+    stalled: bool,
+    reset: bool,
 }
 
-impl Instructions {
-    fn get_instruction(&self, position: usize) -> EncodedInstruction {
-        if position < self.instructions.len() {
-            self.instructions[position]
+impl FetchUnit {
+    fn new(encoded_instructions: Vec<EncodedInstruction>) -> FetchUnit {
+        FetchUnit {
+            pc: 0,
+            exec_pc: None,
+            instructions: encoded_instructions,
+            stalled: false,
+            reset: false,
+        }
+    }
+
+    fn get_exec_pc(&mut self) -> Option<usize> {
+        let ret = self.exec_pc;
+        self.exec_pc = None;
+        ret
+    }
+
+    fn get_instruction(&self) -> EncodedInstruction {
+        if self.pc < self.instructions.len() {
+            self.instructions[self.pc]
         } else {
             EncodedInstruction::Halt
         }
@@ -292,57 +422,373 @@ impl Instructions {
 }
 
 #[derive(Debug)]
-struct ReorderBuffer {
-    oldest: usize,
-    newest: usize,
-    buffer: [Option<ExecuteResult>; 16],
+struct DecodeUnit {
+    instruction_q: LinkedList<EncodedInstruction>,
+    stalled: bool,
+    reset: bool,
 }
 
-impl ReorderBuffer {
-    fn new() -> ReorderBuffer {
-        ReorderBuffer {
-            oldest: 0,
-            newest: 0,
-            buffer: [None ; 16],
+impl DecodeUnit {
+    fn new() -> DecodeUnit {
+        DecodeUnit {
+            instruction_q: LinkedList::new(),
+            stalled: false,
+            reset: false,
         }
     }
 
-    fn get_new_pos(&mut self) -> usize {
-        let ret = self.newest;
-        self.newest = (self.newest + 1) % self.buffer.len();
-        ret
+    fn add_instruction(&mut self, instruction: EncodedInstruction) {
+        self.instruction_q.push_back(instruction);
     }
 
-    fn insert(&mut self, pos: usize, result: ExecuteResult) -> () {
-        self.buffer[pos] = Some(result);
+    fn get_next_instruction(&self) -> Option<EncodedInstruction> {
+        match self.instruction_q.front() {
+            Some(x) => Some((*x).clone()),
+            None => None,
+        }
     }
 
-    fn get_writeback(&mut self) -> ExecuteResult {
-        if let Some(result) = self.buffer[self.oldest] {
-            self.buffer[self.oldest] = None;
-            self.oldest = (self.oldest + 1) % self.buffer.len();
-            result
-        } else {
-            ExecuteResult::None
+    fn pop_instruction(&mut self) {
+        self.instruction_q.pop_front();
+    }
+}
+
+trait FunctionalUnit {
+    fn can_dispatch(&self, operation: Op) -> bool;
+    fn dispatch(&mut self, o1: u32, o2: u32, operation: Op, rs: usize, reg: usize);
+    fn cycle(&mut self);
+    fn is_finished(&self) -> bool;
+    fn get_result(&self) -> Option<(u32, usize, usize)>;
+    fn is_busy(&self) -> bool;
+    fn update_busy(&mut self);
+    fn free(&mut self);
+}
+
+struct ExecUnit {
+    func_units: Vec<Box<FunctionalUnit>>,
+    rs_sts: Vec<ReservationStation>,
+}
+
+impl fmt::Debug for ExecUnit {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Reservation Stations {:?}", self.rs_sts)
+    }
+}
+
+impl ExecUnit {
+    fn new() -> ExecUnit {
+        let alu = Box::new(ALU::new());
+        let alu2 = Box::new(ALU::new());
+        let mut fus: Vec<Box<FunctionalUnit>> = Vec::new();
+        fus.push(alu);
+        fus.push(alu2);
+        let mut rs_sts: Vec<ReservationStation> = vec![ReservationStation::new(), ReservationStation::new()];
+        ExecUnit {
+            func_units: fus,
+            rs_sts: rs_sts,
+        }
+    }
+
+    fn get_free_rs(&self) -> Option<usize> {
+        for rs in 0..self.rs_sts.len() {
+            if !self.rs_sts[rs].busy {
+                return Some(rs);
+            }
+        }
+        return None;
+    }
+
+    fn issue(&mut self, o1: Operand, o2: Operand, operation: Op, rs: usize, writereg: usize) {
+        self.rs_sts[rs].issue(o1, o2, operation, writereg);
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+enum Op {
+    None,
+    Add,
+    And,
+    Or,
+    Sub,
+    Xor,
+    Load,
+}
+
+#[derive(Debug)]
+struct ALU {
+    is_busy: bool,
+    op1: u32,
+    op2: u32,
+    operation: Op,
+    cycles: i32,
+    result: Option<u32>,
+    rs_executing: usize,
+    reg_wb: usize,
+}
+
+impl ALU {
+    fn new() -> ALU {
+        ALU {
+            is_busy: false,
+            op1: 0,
+            op2: 0,
+            operation: Op::None,
+            cycles: 0,
+            result: None,
+            rs_executing: 0,
+            reg_wb: 0,
         }
     }
 }
 
-struct FetchUnit {
-    pc: usize,
+impl FunctionalUnit for ALU {
+    fn can_dispatch(&self, operation: Op) -> bool {
+        match operation {
+            Op::Add => {
+                true
+            },
+            Op::And => {
+                true
+            },
+            Op::Or => {
+                true
+            },
+            Op::Sub => {
+                true
+            }
+            Op::Xor => {
+                true
+            }
+            _ => {
+                false
+            }
+        }
+    }
+
+    fn dispatch(&mut self, o1: u32, o2: u32, operation: Op, rs: usize, reg: usize) {
+        self.op1 = o1;
+        self.op2 = o2;
+        self.operation = operation;
+        self.reg_wb = reg;
+        self.rs_executing = rs;
+        self.cycles = 1;
+    }
+
+    fn cycle(&mut self) {
+        if self.cycles > 0 {
+            self.cycles -= 1;
+            if self.cycles == 0 {
+                self.result = match self.operation {
+                    Op::Add => {
+                        Some(self.op1 + self.op2)  
+                    },
+                    Op::And => {
+                        Some(self.op1 & self.op2)
+                    },
+                    Op::Or => {
+                        Some(self.op1 | self.op2)
+                    },
+                    Op::Sub => {
+                        Some(self.op1 - self.op2)
+                    }
+                    Op::Xor => {
+                        Some(self.op1 ^ self.op2)
+                    }
+                    _ => {
+                        panic!("Not an ALU operation {:?}", self.operation);
+                    }
+                };
+            }
+        }
+    }
+
+    fn is_finished(&self) -> bool {
+        if let Some(_) = self.result {
+            true
+        }
+        else {
+            false
+        }
+    }
+
+    fn get_result(&self) -> Option<(u32, usize, usize)> {
+        if let Some(x) = self.result {
+            Some((x, self.reg_wb, self.rs_executing))
+        }
+        else {
+            None
+        }
+    }
+    fn is_busy(&self) -> bool {
+        self.is_busy
+    }
+
+    fn update_busy(&mut self) {
+        if let None = self.result {
+            if self.cycles == 0{
+                self.is_busy = false;
+            }
+            else{
+                self.is_busy = true;
+            } 
+        }
+        else {
+            self.is_busy = true;
+        }
+    }
+
+    fn free(&mut self) {
+        self.result = None;
+    }
 }
 
-impl FetchUnit {
-    fn new() -> FetchUnit {
-        FetchUnit {
-            pc: 0,
+#[derive(Debug)]
+enum Operand {
+    Value(u32),
+    ReservationStation(usize),
+    None,
+}
+
+#[derive(Debug)]
+struct ReservationStation {
+    wb_reg: usize,
+    o1: Operand,
+    o2: Operand,
+    operation: Op,
+    dependents: Vec<usize>,
+    busy: bool,
+    ready: bool,
+    finished: bool,
+    executing: bool,
+}
+
+impl ReservationStation {
+    fn new() -> ReservationStation {
+        ReservationStation {
+            wb_reg: 0,
+            o1: Operand::None,
+            o2: Operand::None,
+            operation: Op::None,
+            dependents: Vec::new(),
+            busy: false,
+            ready: false,
+            finished: false,
+            executing: false,
+        }
+    }
+
+    fn issue(&mut self, operand1: Operand, operand2: Operand, operation: Op, wb_reg: usize) {
+        self.wb_reg = wb_reg;
+        self.o1 = operand1;
+        self.o2 = operand2;
+        self.operation = operation;
+        self.busy = true;
+    }
+
+    fn add_dependent(&mut self, dependent: usize) {
+        self.dependents.push(dependent);
+    }
+
+    fn free(&mut self) {
+        self.o1 = Operand::None;
+        self.o2 = Operand::None;
+        self.operation = Op::None;
+        self.dependents.clear();
+        self.busy = false;
+        self.finished = false;
+        self.ready = false;
+        self.executing = false;
+    }
+
+    fn update_ready(&mut self) {
+        self.ready = self.dependencies_resolved();
+    }
+
+    fn dependencies_resolved(&self) -> bool {
+        match self.o1 {
+            Operand::Value(_) => {
+                match self.o2 {
+                    Operand::Value(_) => true,
+                    _ => false,
+                }
+            },
+            _ => false,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+// #[derive(Debug)]
+// struct ReorderBuffer {
+//     oldest: usize,
+//     newest: usize,
+//     buffer: [Option<ExecuteResult>; 16],
+// }
+
+// impl ReorderBuffer {
+//     fn new() -> ReorderBuffer {
+//         ReorderBuffer {
+//             oldest: 0,
+//             newest: 0,
+//             buffer: [None ; 16],
+//         }
+//     }
+
+//     fn get_new_pos(&mut self) -> usize {
+//         let ret = self.newest;
+//         self.newest = (self.newest + 1) % self.buffer.len();
+//         ret
+//     }
+
+//     fn insert(&mut self, pos: usize, result: ExecuteResult) -> () {
+//         self.buffer[pos] = Some(result);
+//     }
+
+//     fn get_writeback(&mut self) -> ExecuteResult {
+//         if let Some(result) = self.buffer[self.oldest] {
+//             self.buffer[self.oldest] = None;
+//             self.oldest = (self.oldest + 1) % self.buffer.len();
+//             result
+//         } else {
+//             ExecuteResult::None
+//         }
+//     }
+// }
+
+#[derive(Debug)]
 struct Registers {
     gprs: [u32; 32], // 32 GPRS
+    rat: [Option<usize>; 32], 
+}
+
+impl Registers {
+    fn new() -> Registers {
+        Registers{
+            gprs: [0u32; 32],
+            rat: [None; 32],
+        }
+    }
+
+    fn read_reg(&self, reg: usize) -> Operand {
+        match self.rat[reg] {
+            None => {
+                Operand::Value(self.gprs[reg])
+            }
+            Some(reservation) => {
+                Operand::ReservationStation(reservation)
+            }
+        }
+    }
+
+    fn set_owner(&mut self, reg: usize, new_owner: usize) {
+        self.rat[reg] = Some(new_owner);
+    }
+
+    fn write_result(&mut self, value: u32, register: usize, rs: usize) {
+        if self.rat[register] == Some(rs) {
+            self.gprs[register] = value;
+            self.rat[register] = None;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -373,36 +819,7 @@ enum EncodedInstruction {
     Xor(usize, usize, usize),
 }
 
-#[derive(Clone, Copy, Debug)]
-enum DecodedInstruction {
-    Noop,
-    Halt,
-    Add(usize, u32, u32),
-    And(usize, u32, u32),
-    Beq(u32, u32, usize),
-    Blt(u32, u32, usize),
-    Div(usize, u32, u32),
-    J(usize),
-    Load(usize, u32),
-    Mod(usize, u32, u32),
-    Mov(usize, u32),
-    Mult(usize, u32, u32),
-    Or(usize, u32, u32),
-    Sl(usize, u32, u32),
-    Sr(usize, u32, u32),
-    Sub(usize, u32, u32),
-    Store(u32, u32),
-    Xor(usize, u32, u32),
-}
-
-#[derive(Clone, Copy, Debug)]
-enum ExecuteResult {
-    Halt,
-    None,
-    Writeback(usize, u32),
-}
-
-fn assemble(assembly: Vec<String>) -> Instructions {
+fn assemble(assembly: Vec<String>) -> Vec<EncodedInstruction> {
     let mut instructions: Vec<EncodedInstruction> = Vec::new();
 
     for line in assembly {
@@ -504,7 +921,7 @@ fn assemble(assembly: Vec<String>) -> Instructions {
             }
         };
     }
-    Instructions{ instructions: instructions }
+    instructions
 }
 
 fn three_args(inst: Vec<&str>) -> (usize, usize, usize) {
