@@ -7,6 +7,9 @@ use std::fmt;
 
 
 const MEM_SIZE: usize = 52;
+const NUM_RS: usize = 4;
+const NUM_ALUS: usize = 1;
+const NUM_MULTS: usize = 1;
 
 fn main() {
     println!("Hello, world!");
@@ -486,12 +489,18 @@ impl fmt::Debug for ExecUnit {
 
 impl ExecUnit {
     fn new() -> ExecUnit {
-        let alu = FunctionalUnit::new(FUType::ALU);
-        let alu2 = FunctionalUnit::new(FUType::Multiplier);
         let mut fus: Vec<FunctionalUnit> = Vec::new();
-        fus.push(alu);
-        fus.push(alu2);
-        let mut rs_sts: Vec<ReservationStation> = vec![ReservationStation::new(), ReservationStation::new()];
+        for i in 0..NUM_ALUS {
+            fus.push(FunctionalUnit::new(FUType::ALU));
+        }
+        for i in 0..NUM_MULTS {
+            fus.push(FunctionalUnit::new(FUType::Multiplier));
+        }
+
+        let mut rs_sts: Vec<ReservationStation> = Vec::new();
+        for i in 0..NUM_RS {
+            rs_sts.push(ReservationStation::new());
+        }
         ExecUnit {
             func_units: fus,
             rs_sts: rs_sts,
