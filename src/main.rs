@@ -47,16 +47,14 @@ fn main() {
     let mut i = 0;
     loop {
         writeback(&mut cpu);
-        println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
         execute(&mut cpu);
-        println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
         decode(&mut cpu);
-        println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
         fetch(&mut cpu);
         println!("CYCLE");
         println!("");
         cycles += 1;
-        println!("{:?}", cpu);
+        //println!("{:?}", cpu);
+        println!("{:?}", cpu.exec_unit.rs_sts);
         if i > 40 {
             break;
         }
@@ -124,10 +122,11 @@ fn decode(cpu: &mut CPU) {
                                 },
                                 EncodedInstruction::Addi(d, s, imm) => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
                                         let operand1 = cpu.read_reg(s, r);
                                         let operand2 = Operand::Value(imm);
-                                        cpu.registers.set_owner(d, r);
-                                        cpu.exec_unit.issue(operand1, operand2, Op::Add, r, d);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Add, r, rob_pos);
                                         cpu.decode_unit.pop_instruction();
                                     }
                                     else {
@@ -136,10 +135,11 @@ fn decode(cpu: &mut CPU) {
                                 },
                                 EncodedInstruction::Add(d, s, t)    => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
                                         let operand1 = cpu.read_reg(s, r);
                                         let operand2 = cpu.read_reg(t, r);
-                                        cpu.registers.set_owner(d, r);
-                                        cpu.exec_unit.issue(operand1, operand2, Op::Add, r, d);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Add, r, rob_pos);
                                         cpu.decode_unit.pop_instruction();
                                     }
                                     else {
@@ -148,10 +148,11 @@ fn decode(cpu: &mut CPU) {
                                 },
                                 EncodedInstruction::And(d, s, t)    => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
                                         let operand1 = cpu.read_reg(s, r);
                                         let operand2 = cpu.read_reg(t, r);
-                                        cpu.registers.set_owner(d, r);
-                                        cpu.exec_unit.issue(operand1, operand2, Op::And, r, d);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::And, r, rob_pos);
                                         cpu.decode_unit.pop_instruction();
                                     }
                                     else {
@@ -160,10 +161,11 @@ fn decode(cpu: &mut CPU) {
                                 },
                                 EncodedInstruction::Andi(d, s, imm) => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
                                         let operand1 = cpu.read_reg(s, r);
                                         let operand2 = Operand::Value(imm);
-                                        cpu.registers.set_owner(d, r);
-                                        cpu.exec_unit.issue(operand1, operand2, Op::And, r, d);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::And, r, rob_pos);
                                         cpu.decode_unit.pop_instruction();
                                     }
                                     else {
@@ -200,19 +202,21 @@ fn decode(cpu: &mut CPU) {
                                 EncodedInstruction::Mult(d, s, t)   => {
                                     //DecodedInstruction::Mult(d, registers.read_reg(s), registers.read_reg(t))
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
                                         let operand1 = cpu.read_reg(s, r);
                                         let operand2 = cpu.read_reg(t, r);
-                                        cpu.registers.set_owner(d, r);
-                                        cpu.exec_unit.issue(operand1, operand2, Op::Mult, r, d);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Mult, r, rob_pos);
                                         cpu.decode_unit.pop_instruction();
                                     }
                                 },
                                 EncodedInstruction::Or(d, s, t)     => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
                                         let operand1 = cpu.read_reg(s, r);
                                         let operand2 = cpu.read_reg(t, r);
-                                        cpu.registers.set_owner(d, r);
-                                        cpu.exec_unit.issue(operand1, operand2, Op::Or, r, d);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Or, r, rob_pos);
                                         cpu.decode_unit.pop_instruction();
                                     }
                                     else {
@@ -227,10 +231,11 @@ fn decode(cpu: &mut CPU) {
                                 },
                                 EncodedInstruction::Sub(d, s, t)    => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
                                         let operand1 = cpu.read_reg(s, r);
                                         let operand2 = cpu.read_reg(t, r);
-                                        cpu.registers.set_owner(d, r);
-                                        cpu.exec_unit.issue(operand1, operand2, Op::Sub, r, d);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Sub, r, rob_pos);
                                         cpu.decode_unit.pop_instruction();
                                     }
                                     else {
@@ -239,10 +244,11 @@ fn decode(cpu: &mut CPU) {
                                 },
                                 EncodedInstruction::Subi(d, s, imm) => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
                                         let operand1 = cpu.read_reg(s,r);
                                         let operand2 = Operand::Value(imm);
-                                        cpu.registers.set_owner(d, r);
-                                        cpu.exec_unit.issue(operand1, operand2, Op::Sub, r, d);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Sub, r, rob_pos);
                                         cpu.decode_unit.pop_instruction();
                                     }
                                     else {
@@ -257,10 +263,11 @@ fn decode(cpu: &mut CPU) {
                                 },
                                 EncodedInstruction::Xor(d, s, t)    => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
                                         let operand1 = cpu.read_reg(s, r);
                                         let operand2 = cpu.read_reg(t, r);
-                                        cpu.registers.set_owner(d, r);
-                                        cpu.exec_unit.issue(operand1, operand2, Op::Xor, r, d);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Xor, r, rob_pos);
                                         cpu.decode_unit.pop_instruction();
                                     }
                                     else {
@@ -283,23 +290,20 @@ fn decode(cpu: &mut CPU) {
 
 fn execute(cpu: &mut CPU)  {
 
-    //execute 
-    println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
     for fu in &mut cpu.exec_unit.func_units {
         fu.cycle();
     }
-    println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
     //now dispatch
     for rs in 0..cpu.exec_unit.rs_sts.len() {
-        if cpu.exec_unit.rs_sts[rs].ready && !cpu.exec_unit.rs_sts[rs].finished && !cpu.exec_unit.rs_sts[rs].executing {
+        if cpu.exec_unit.rs_sts[rs].ready {
             //try to dipatch to functional unit
             for fu in &mut cpu.exec_unit.func_units {
                 if !fu.is_busy() {
                     if let Operand::Value(x) = cpu.exec_unit.rs_sts[rs].o1 {
                         if let Operand::Value(y) = cpu.exec_unit.rs_sts[rs].o2 {
-                            println!("Dispatching {} = {} {:?} {} from {}", cpu.exec_unit.rs_sts[rs].wb_reg, x, cpu.exec_unit.rs_sts[rs].operation,y, rs );
-                            if fu.dispatch(x, y, cpu.exec_unit.rs_sts[rs].operation, rs, cpu.exec_unit.rs_sts[rs].wb_reg) {
-                                cpu.exec_unit.rs_sts[rs].executing = true;
+                            println!("Dispatching {} = {} {:?} {} from {}", cpu.exec_unit.rs_sts[rs].rob_entry, x, cpu.exec_unit.rs_sts[rs].operation, y, rs );
+                            if fu.dispatch(x, y, cpu.exec_unit.rs_sts[rs].operation, cpu.exec_unit.rs_sts[rs].rob_entry) {
+                                cpu.exec_unit.rs_sts[rs].free();
                                 break; //found a functional unit to execute this RS 
                             }
                            
@@ -315,48 +319,46 @@ fn execute(cpu: &mut CPU)  {
 
 fn writeback(cpu: &mut CPU) {
     cpu.cdb_busy = false;
-
     for rs in 0..cpu.exec_unit.rs_sts.len() {
-        if cpu.exec_unit.rs_sts[rs].finished {
-            cpu.exec_unit.rs_sts[rs].free();
-        }
-        cpu.exec_unit.rs_sts[rs].update_ready()
+        cpu.exec_unit.rs_sts[rs].update_ready();
     }
-
     for fu in 0..cpu.exec_unit.func_units.len() {
         cpu.exec_unit.func_units[fu].update_busy();
-        println!("FU BUSY: {:?}", cpu.exec_unit.func_units[fu].get_result());
     }
 
 
     for fu in 0..cpu.exec_unit.func_units.len() {
-        if let Some((result, register, rs)) = cpu.exec_unit.func_units[fu].get_result() {
+        if let Some((result, rob_entry)) = cpu.exec_unit.func_units[fu].get_result() {
             if !cpu.cdb_busy {
-                println!("WRITING BACK: {}, {}, {}", result, register, rs);
+                println!("WRITING TO ROB: {}, {}", result, rob_entry);
                 cpu.cdb_busy = true;
-                let deps = cpu.exec_unit.rs_sts[rs].dependents.clone();
-                for dependent in deps {
-                    if let Operand::ReservationStation(r) = cpu.exec_unit.rs_sts[dependent].o1 {
-                        if rs == r {
+                
+                for dependent in 0..cpu.exec_unit.rs_sts.len() {
+                    if let Operand::Rob(r) = cpu.exec_unit.rs_sts[dependent].o1 {
+                        if rob_entry == r {
                             cpu.exec_unit.rs_sts[dependent].o1 = Operand::Value(result);
                             cpu.exec_unit.rs_sts[dependent].ready = false;
                         }
                     }
-                    if let Operand::ReservationStation(r) = cpu.exec_unit.rs_sts[dependent].o2 {
-                        if rs == r {
+                    if let Operand::Rob(r) = cpu.exec_unit.rs_sts[dependent].o2 {
+                        if rob_entry == r {
                             cpu.exec_unit.rs_sts[dependent].o2 = Operand::Value(result);
                             cpu.exec_unit.rs_sts[dependent].ready = false;
                         }
                     }
                 }
-                cpu.registers.write_result(result, register, rs);
+                //cpu.registers.write_result(result, rob_entry);
+                cpu.rob.insert(rob_entry, result);
                 cpu.exec_unit.func_units[fu].free();
-                println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
-                cpu.exec_unit.rs_sts[rs].finished = true;
             }
         }
     }
-    println!("HERE: {:?}", cpu.exec_unit.func_units[0].get_result());
+
+    if let Some((res, rob)) = cpu.rob.get_writeback() {
+        cpu.registers.write_result(res, rob);
+        println!("WRITING fromROB TO REG: {}, {}", res, rob);
+    }
+
 }
 
 struct CPU {
@@ -365,11 +367,12 @@ struct CPU {
     exec_unit: ExecUnit,
     cdb_busy: bool,
     registers: Registers,
+    rob: ReorderBuffer,
 }
 
 impl fmt::Debug for CPU {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "cdb_busy {:}\n Fetch unit: {:?}\nDecode Unit: {:?}\nExec Unit: {:?}\nRegisters: {:?}\n", self.cdb_busy, self.fetch_unit, self.decode_unit, self.exec_unit, self.registers)
+        write!(f, "cdb_busy {:}\n\nFetch unit: {:?}\n\nDecode Unit: {:?}\n\nExec Unit: {:?}\n\nRegisters: {:?}\n\nROB: {:?}", self.cdb_busy, self.fetch_unit, self.decode_unit, self.exec_unit, self.registers, self.rob)
     }
 }
 
@@ -381,6 +384,7 @@ impl CPU {
             exec_unit: ExecUnit::new(),
             cdb_busy: false,
             registers: Registers::new(),
+            rob: ReorderBuffer::new(),
         }
     }
 
@@ -389,9 +393,8 @@ impl CPU {
             None => {
                 Operand::Value(self.registers.gprs[reg])
             }
-            Some(reservation) => {
-                self.exec_unit.rs_sts[reservation].add_dependent(rs);
-                Operand::ReservationStation(reservation)
+            Some(rob) => {
+                Operand::Rob(rob)
             }
         }
     }
@@ -516,8 +519,8 @@ impl ExecUnit {
         return None;
     }
 
-    fn issue(&mut self, o1: Operand, o2: Operand, operation: Op, rs: usize, writereg: usize) {
-        self.rs_sts[rs].issue(o1, o2, operation, writereg);
+    fn issue(&mut self, o1: Operand, o2: Operand, operation: Op, rs: usize, rob_entry: usize) {
+        self.rs_sts[rs].issue(o1, o2, operation, rob_entry);
     }
 }
 
@@ -549,8 +552,7 @@ struct FunctionalUnit {
     operation: Op,
     cycles: i32,
     result: Option<u32>,
-    rs_executing: usize,
-    reg_wb: usize,
+    rob_entry: usize,
 }
 
 impl FunctionalUnit {
@@ -563,12 +565,11 @@ impl FunctionalUnit {
             operation: Op::None,
             cycles: 0,
             result: None,
-            rs_executing: 0,
-            reg_wb: 0,
+            rob_entry: 0,
         }
     }
 
-    fn dispatch(&mut self, o1: u32, o2: u32, operation: Op, rs: usize, reg: usize) -> bool {
+    fn dispatch(&mut self, o1: u32, o2: u32, operation: Op, rob_entry: usize) -> bool {
         let correct_type = match self.fu_type {
             FUType::ALU => {
                 match operation {
@@ -616,8 +617,7 @@ impl FunctionalUnit {
             self.op1 = o1;
             self.op2 = o2;
             self.operation = operation;
-            self.reg_wb = reg;
-            self.rs_executing = rs;
+            self.rob_entry = rob_entry;
         }
         return correct_type;
     }
@@ -677,9 +677,9 @@ impl FunctionalUnit {
         }
     }
 
-    fn get_result(&self) -> Option<(u32, usize, usize)> {
+    fn get_result(&self) -> Option<(u32, usize)> {
         if let Some(x) = self.result {
-            Some((x, self.reg_wb, self.rs_executing))
+            Some((x, self.rob_entry))
         }
         else {
             None
@@ -711,59 +711,46 @@ impl FunctionalUnit {
 #[derive(Debug)]
 enum Operand {
     Value(u32),
-    ReservationStation(usize),
+    Rob(usize),
     None,
 }
 
 #[derive(Debug)]
 struct ReservationStation {
-    wb_reg: usize,
+    rob_entry: usize,
     o1: Operand,
     o2: Operand,
     operation: Op,
-    dependents: Vec<usize>,
     busy: bool,
     ready: bool,
-    finished: bool,
-    executing: bool,
 }
 
 impl ReservationStation {
     fn new() -> ReservationStation {
         ReservationStation {
-            wb_reg: 0,
+            rob_entry: 0,
             o1: Operand::None,
             o2: Operand::None,
             operation: Op::None,
-            dependents: Vec::new(),
             busy: false,
             ready: false,
-            finished: false,
-            executing: false,
         }
     }
 
-    fn issue(&mut self, operand1: Operand, operand2: Operand, operation: Op, wb_reg: usize) {
-        self.wb_reg = wb_reg;
+    fn issue(&mut self, operand1: Operand, operand2: Operand, operation: Op, rob_entry: usize) {
+        self.rob_entry = rob_entry;
         self.o1 = operand1;
         self.o2 = operand2;
         self.operation = operation;
         self.busy = true;
     }
 
-    fn add_dependent(&mut self, dependent: usize) {
-        self.dependents.push(dependent);
-    }
-
     fn free(&mut self) {
         self.o1 = Operand::None;
         self.o2 = Operand::None;
         self.operation = Op::None;
-        self.dependents.clear();
         self.busy = false;
-        self.finished = false;
         self.ready = false;
-        self.executing = false;
     }
 
     fn update_ready(&mut self) {
@@ -783,42 +770,63 @@ impl ReservationStation {
     }
 }
 
-// #[derive(Debug)]
-// struct ReorderBuffer {
-//     oldest: usize,
-//     newest: usize,
-//     buffer: [Option<ExecuteResult>; 16],
-// }
+#[derive(Debug, Copy, Clone)]
+struct ReorderBufferEntry {
+    register: usize,
+    result: Option<u32>,
+}
 
-// impl ReorderBuffer {
-//     fn new() -> ReorderBuffer {
-//         ReorderBuffer {
-//             oldest: 0,
-//             newest: 0,
-//             buffer: [None ; 16],
-//         }
-//     }
+impl ReorderBufferEntry {
+    fn new() -> ReorderBufferEntry {
+        ReorderBufferEntry {
+            register: 0,
+            result: None,
+        }
+    }
 
-//     fn get_new_pos(&mut self) -> usize {
-//         let ret = self.newest;
-//         self.newest = (self.newest + 1) % self.buffer.len();
-//         ret
-//     }
+    fn clear(&mut self) {
+        self.result = None;
+    }
+}
 
-//     fn insert(&mut self, pos: usize, result: ExecuteResult) -> () {
-//         self.buffer[pos] = Some(result);
-//     }
+#[derive(Debug)]
+struct ReorderBuffer {
+    commit: usize,
+    issue: usize,
+    buffer: [ReorderBufferEntry; 32],
+}
 
-//     fn get_writeback(&mut self) -> ExecuteResult {
-//         if let Some(result) = self.buffer[self.oldest] {
-//             self.buffer[self.oldest] = None;
-//             self.oldest = (self.oldest + 1) % self.buffer.len();
-//             result
-//         } else {
-//             ExecuteResult::None
-//         }
-//     }
-// }
+impl ReorderBuffer {
+    fn new() -> ReorderBuffer {
+        ReorderBuffer {
+            commit: 0,
+            issue: 0,
+            buffer: [ReorderBufferEntry::new() ; 32],
+        }
+    }
+
+    fn commit_to(&mut self, register: usize) -> usize {
+        let ret = self.issue;
+        self.buffer[ret].register = register;
+        self.issue = (self.issue + 1) % self.buffer.len();
+        ret
+    }
+
+    fn insert(&mut self, pos: usize, result: u32) {
+        self.buffer[pos].result = Some((result));
+    }
+
+    fn get_writeback(&mut self) -> Option<(u32, usize)> {
+        if let Some(result) = self.buffer[self.commit].result {
+            let rob_ret = self.commit;
+            self.buffer[self.commit].clear();
+            self.commit = (self.commit + 1) % self.buffer.len();
+            Some((result, rob_ret))
+        } else {
+            None
+        }
+    }
+}
 
 #[derive(Debug)]
 struct Registers {
@@ -839,8 +847,8 @@ impl Registers {
             None => {
                 Operand::Value(self.gprs[reg])
             }
-            Some(reservation) => {
-                Operand::ReservationStation(reservation)
+            Some(rob) => {
+                Operand::Rob(rob)
             }
         }
     }
@@ -849,10 +857,14 @@ impl Registers {
         self.rat[reg] = Some(new_owner);
     }
 
-    fn write_result(&mut self, value: u32, register: usize, rs: usize) {
-        if self.rat[register] == Some(rs) {
-            self.gprs[register] = value;
-            self.rat[register] = None;
+    fn write_result(&mut self, value: u32, rob: usize) {
+        for i in 0..self.rat.len() {
+            if let Some(robt) = self.rat[i] {
+                if robt == rob {
+                    self.gprs[i] = value;
+                    self.rat[i] = None;
+                }
+            }
         }
     }
 }
