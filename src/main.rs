@@ -31,38 +31,24 @@ fn main() {
 
     let mut cycles = 0;
 
-    // loop {
-    //     let w_res = writeback(&mut cpu);
-    //     let e_res = execute(&mut cpu);
-    //     let d_res = decode(&mut cpu);
-    //     let f_res = fetch(&mut cpu);
-    //     println!("CYCLE");
-    //     println!("");
-    //     cycles += 1;
-    //     if (w_res + e_res + d_res + f_res) == 0 {
-    //         break;
-    //     }
-    // }
-    //finish off last three cycles
-    let mut i = 0;
     loop {
         writeback(&mut cpu);
-        execute(&mut cpu);
-        decode(&mut cpu);
-        fetch(&mut cpu);
-        println!("CYCLE");
-        println!("");
-        cycles += 1;
-        //println!("{:?}", cpu);
-        println!("{:?}", cpu.exec_unit.rs_sts);
-        if i > 40 {
+        let e_res = execute(&mut cpu);
+        let d_res = decode(&mut cpu);
+        let f_res = fetch(&mut cpu);
+        if (e_res + d_res + f_res) == 0 {
             break;
         }
-        i += 1;
+        println!("CYCLE {}", cycles);
+        println!("{} : {} : {}", e_res, d_res, f_res);
+        println!("");
+        println!("CPU: {:?}", cpu);
+        cycles += 1;
+        if (e_res + d_res + f_res) == 0 {
+            break;
+        }
     }
-    println!("here1");
 
-    cycles += 3;
     println!("{:?}", cpu.registers.gprs);
     println!("Instructions executed: {}", num_instructions);
     println!("Number of cycles: {}", cycles);
@@ -97,10 +83,10 @@ fn fetch(cpu: &mut CPU) -> u32 {
     }
 }
 
-fn decode(cpu: &mut CPU) {
+fn decode(cpu: &mut CPU) -> u32 {
     match cpu.decode_unit.stalled {
         true => {
-            // do nothing for now
+            0
         },
         false => {
             let possible_instruction = cpu.decode_unit.get_next_instruction();
@@ -110,15 +96,17 @@ fn decode(cpu: &mut CPU) {
                     match reset {
                         true => {
                             cpu.decode_unit.reset = false;
-                            //TODO properly implement reset
+                            1
                         },
                         false => {
                             match instruction {
                                 EncodedInstruction::Noop            => {
                                     cpu.decode_unit.pop_instruction();
+                                    1
                                 }
                                 EncodedInstruction::Halt            => {
-                                    //set decode to finished
+                                    cpu.decode_unit.pop_instruction();
+                                    0
                                 },
                                 EncodedInstruction::Addi(d, s, imm) => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -132,6 +120,7 @@ fn decode(cpu: &mut CPU) {
                                     else {
                                         // do nothing until next cycle
                                     }
+                                    1
                                 },
                                 EncodedInstruction::Add(d, s, t)    => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -145,6 +134,7 @@ fn decode(cpu: &mut CPU) {
                                     else {
                                         // do nothing until next cycle
                                     }
+                                    1
                                 },
                                 EncodedInstruction::And(d, s, t)    => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -158,6 +148,7 @@ fn decode(cpu: &mut CPU) {
                                     else {
                                         // do nothing until next cycle
                                     }
+                                    1
                                 },
                                 EncodedInstruction::Andi(d, s, imm) => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -171,33 +162,43 @@ fn decode(cpu: &mut CPU) {
                                     else {
                                         // do nothing until next cycle
                                     }
+                                    1
                                 },
                                 EncodedInstruction::Beq(s, t, inst) => {
                                     //DecodedInstruction::Beq(registers.read_reg(s), registers.read_reg(t), inst)
+                                    1
                                 },
                                 EncodedInstruction::Blt(s, t, inst) => {
                                     //DecodedInstruction::Blt(registers.read_reg(s), registers.read_reg(t), inst)
+                                    1
                                 },
                                 EncodedInstruction::Div(d, s, t)    => {
                                     //DecodedInstruction::Div(d, registers.read_reg(s), registers.read_reg(t))
+                                    1
                                 },
                                 EncodedInstruction::J(inst)         => {
                                     //DecodedInstruction::J(inst)
+                                    1
                                 },
                                 EncodedInstruction::Ldc(d, imm)     => {
                                     //DecodedInstruction::Mov(d, imm)
+                                    1
                                 },
                                 EncodedInstruction::Li(d, imm)      => {
                                     //DecodedInstruction::Load(d, imm)
+                                    1
                                 },
                                 EncodedInstruction::Lw(d, t)        => {
                                     //DecodedInstruction::Load(d, registers.read_reg(t))
+                                    1
                                 },
                                 EncodedInstruction::Mod(d, s, t)    => {
                                     //DecodedInstruction::Mod(d, registers.read_reg(s), registers.read_reg(t))
+                                    1
                                 },
                                 EncodedInstruction::Mov(d, s)       => {
                                     //DecodedInstruction::Mov(d, registers.read_reg(s))
+                                    1
                                 },
                                 EncodedInstruction::Mult(d, s, t)   => {
                                     //DecodedInstruction::Mult(d, registers.read_reg(s), registers.read_reg(t))
@@ -209,6 +210,7 @@ fn decode(cpu: &mut CPU) {
                                         cpu.exec_unit.issue(operand1, operand2, Op::Mult, r, rob_pos);
                                         cpu.decode_unit.pop_instruction();
                                     }
+                                    1
                                 },
                                 EncodedInstruction::Or(d, s, t)     => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -222,12 +224,15 @@ fn decode(cpu: &mut CPU) {
                                     else {
                                         // do nothing until next cycle
                                     }
+                                    1
                                 },
                                 EncodedInstruction::Sl(d, s, t)     => {
                                     //DecodedInstruction::Sl(d, registers.read_reg(s), t)
+                                    1
                                 },
                                 EncodedInstruction::Sr(d, s, t)     => {
                                     //DecodedInstruction::Sr(d, registers.read_reg(s), t)
+                                    1
                                 },
                                 EncodedInstruction::Sub(d, s, t)    => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -241,6 +246,7 @@ fn decode(cpu: &mut CPU) {
                                     else {
                                         // do nothing until next cycle
                                     }
+                                    1
                                 },
                                 EncodedInstruction::Subi(d, s, imm) => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -254,12 +260,15 @@ fn decode(cpu: &mut CPU) {
                                     else {
                                         // do nothing until next cycle
                                     }
+                                    1
                                 },
                                 EncodedInstruction::Si(t, imm)      => {
                                     //DecodedInstruction::Store(registers.read_reg(t), imm)
+                                    1
                                 },
                                 EncodedInstruction::Sw(s, d)        => {
                                     //DecodedInstruction::Store(registers.read_reg(s), registers.read_reg(d))
+                                    1
                                 },
                                 EncodedInstruction::Xor(d, s, t)    => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -273,26 +282,19 @@ fn decode(cpu: &mut CPU) {
                                     else {
                                         // do nothing until next cycle
                                     }
+                                    1
                                 },
-                                // _ => {
-                                //     panic!("{:?} is an unimplemented instruction", instruction);
-                                //     EncodedInstruction::Noop
-                                // }
                             }
                         },
-                    };
+                    }
                 },
-                None => (),
-            };
+                None => 0,
+            }
         },
-    };
+    }
 }
 
-fn execute(cpu: &mut CPU)  {
-
-    for fu in &mut cpu.exec_unit.func_units {
-        fu.cycle();
-    }
+fn execute(cpu: &mut CPU) -> u32 {
     //now dispatch
     for rs in 0..cpu.exec_unit.rs_sts.len() {
         if cpu.exec_unit.rs_sts[rs].ready {
@@ -309,10 +311,20 @@ fn execute(cpu: &mut CPU)  {
                            
                         }
                     }
-                    
                 }
             }
         }
+    }
+
+    for fu in &mut cpu.exec_unit.func_units {
+        fu.cycle();
+    }
+
+    if cpu.exec_unit.finished() {
+        0
+    }
+    else {
+        1
     }
 
 }
@@ -510,6 +522,10 @@ impl ExecUnit {
         }
     }
 
+    fn finished(&mut self) -> bool {
+        self.func_units.iter().all(|ref x| x.finished()) && self.rs_sts.iter().all(|ref x| x.finished())
+    }
+
     fn get_free_rs(&self) -> Option<usize> {
         for rs in 0..self.rs_sts.len() {
             if !self.rs_sts[rs].busy {
@@ -616,6 +632,7 @@ impl FunctionalUnit {
         if correct_type {
             self.op1 = o1;
             self.op2 = o2;
+            self.is_busy = true;
             self.operation = operation;
             self.rob_entry = rob_entry;
         }
@@ -668,6 +685,20 @@ impl FunctionalUnit {
         }
     }
 
+    fn finished(&self) -> bool {
+        if let None = self.result {
+            if self.cycles == 0  {
+                true
+            }
+            else {
+                false
+            }
+        }
+        else {
+            false
+        }
+    }
+
     fn is_finished(&self) -> bool {
         if let Some(_) = self.result {
             true
@@ -705,6 +736,7 @@ impl FunctionalUnit {
 
     fn free(&mut self) {
         self.result = None;
+        self.is_busy = false; 
     }
 }
 
@@ -767,6 +799,10 @@ impl ReservationStation {
             },
             _ => false,
         }
+    }
+
+    fn finished(&self) -> bool {
+        !self.busy
     }
 }
 
