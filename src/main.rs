@@ -32,19 +32,19 @@ fn main() {
     let mut cycles = 0;
 
     loop {
-        writeback(&mut cpu);
+        let w_res = writeback(&mut cpu);
         let e_res = execute(&mut cpu);
         let d_res = decode(&mut cpu);
         let f_res = fetch(&mut cpu);
-        if (e_res + d_res + f_res) == 0 {
+        if (w_res + e_res + d_res + f_res) == 0 {
             break;
         }
         println!("CYCLE {}", cycles);
-        println!("{} : {} : {}", e_res, d_res, f_res);
+        println!("{} : {} : {} : {}", w_res, e_res, d_res, f_res);
         println!("");
         println!("CPU: {:?}", cpu);
         cycles += 1;
-        if (e_res + d_res + f_res) == 0 {
+        if (w_res + e_res + d_res + f_res) == 0 {
             break;
         }
     }
@@ -61,8 +61,11 @@ fn main() {
 
 fn fetch(cpu: &mut CPU) -> u32 {
 
-    match cpu.fetch_unit.stalled {
-        true => 1,
+    match cpu.fetch_unit.reset {
+        true => {
+            cpu.fetch_unit.reset = false;
+            1
+        },
         false => {
             let inst = cpu.fetch_unit.get_instruction();
             match cpu.fetch_unit.get_exec_pc() {
@@ -329,7 +332,7 @@ fn execute(cpu: &mut CPU) -> u32 {
 
 }
 
-fn writeback(cpu: &mut CPU) {
+fn writeback(cpu: &mut CPU) -> u32{
     cpu.cdb_busy = false;
     for rs in 0..cpu.exec_unit.rs_sts.len() {
         cpu.exec_unit.rs_sts[rs].update_ready();
@@ -360,15 +363,36 @@ fn writeback(cpu: &mut CPU) {
                     }
                 }
                 //cpu.registers.write_result(result, rob_entry);
-                cpu.rob.insert(rob_entry, result);
+                cpu.rob.insert(rob_entry, ExecResult::Value(result));
                 cpu.exec_unit.func_units[fu].free();
             }
         }
     }
 
-    if let Some((res, rob)) = cpu.rob.get_writeback() {
-        cpu.registers.write_result(res, rob);
-        println!("WRITING fromROB TO REG: {}, {}", res, rob);
+    match cpu.rob.get_writeback() {
+        ReorderBufferResult::Writeback(res, rob, reg) => {
+
+            cpu.registers.write_result(res, rob, reg);
+        },
+        ReorderBufferResult::Branch(predicted, actual) => {
+                //ROB also beign used to store predicted PC for branches
+                //If not equal then a misprediction occurred
+            if predicted != actual {
+                //Need to clear RSs, FUs, Instruction Queue
+                cpu.exec_unit.reset();
+                cpu.decode_unit.reset();
+                //Also need to set the PC correctly
+                cpu.fetch_unit.mispredict(actual);
+                //need to let branch predictor know of incorrect prediction
+            }
+        },
+        ReorderBufferResult::None => (),
+    };
+    
+    if cpu.rob.is_empty() {
+        0
+    } else {
+        1
     }
 
 }
@@ -433,6 +457,11 @@ impl FetchUnit {
         }
     }
 
+    fn mispredict(&mut self, new_pc: usize) {
+        self.reset = true;
+        self.pc = new_pc;
+    }
+
     fn get_exec_pc(&mut self) -> Option<usize> {
         let ret = self.exec_pc;
         self.exec_pc = None;
@@ -464,6 +493,14 @@ impl DecodeUnit {
         }
     }
 
+    fn reset(&mut self) {
+        self.clear_instructions();
+    }
+
+    fn clear_instructions(&mut self) {
+        self.instruction_q.clear();
+    }
+
     fn add_instruction(&mut self, instruction: EncodedInstruction) {
         self.instruction_q.push_back(instruction);
     }
@@ -479,17 +516,6 @@ impl DecodeUnit {
         self.instruction_q.pop_front();
     }
 }
-
-// trait FunctionalUnit {
-//     fn can_dispatch(&self, operation: Op) -> bool;
-//     fn dispatch(&mut self, o1: u32, o2: u32, operation: Op, rs: usize, reg: usize);
-//     fn cycle(&mut self);
-//     fn is_finished(&self) -> bool;
-//     fn get_result(&self) -> Option<(u32, usize, usize)>;
-//     fn is_busy(&self) -> bool;
-//     fn update_busy(&mut self);
-//     fn free(&mut self);
-// }
 
 struct ExecUnit {
     func_units: Vec<FunctionalUnit>,
@@ -519,6 +545,15 @@ impl ExecUnit {
         ExecUnit {
             func_units: fus,
             rs_sts: rs_sts,
+        }
+    }
+
+    fn reset(&mut self) {
+        for rs in &mut self.rs_sts {
+            rs.free();
+        }
+        for fu in &mut self.func_units {
+            fu.reset();
         }
     }
 
@@ -738,6 +773,15 @@ impl FunctionalUnit {
         self.result = None;
         self.is_busy = false; 
     }
+
+    fn reset(&mut self) {
+        self.op1 = 0;
+        self.op2 = 0;
+        self.operation = Op::None;
+        self.cycles = 0;
+        self.result = None;
+        self.rob_entry = 0; 
+    }
 }
 
 #[derive(Debug)]
@@ -807,9 +851,22 @@ impl ReservationStation {
 }
 
 #[derive(Debug, Copy, Clone)]
+enum ExecResult {
+    Value(u32),
+    Branch(usize),
+}
+
+#[derive(Debug, Copy, Clone)]
+enum ReorderBufferResult {
+    Writeback(u32, usize, usize),
+    Branch(usize, usize),
+    None,
+}
+
+#[derive(Debug, Copy, Clone)]
 struct ReorderBufferEntry {
     register: usize,
-    result: Option<u32>,
+    result: Option<ExecResult>,
 }
 
 impl ReorderBufferEntry {
@@ -841,25 +898,45 @@ impl ReorderBuffer {
         }
     }
 
+    fn is_empty(&self) -> bool {
+        self.commit == self.issue
+    }
+
+    fn empty(&mut self) {
+        for entry in &mut self.buffer {
+            entry.clear();
+        }
+        self.issue = self.commit;
+    }
+
     fn commit_to(&mut self, register: usize) -> usize {
         let ret = self.issue;
+        self.buffer[ret].result = None;
         self.buffer[ret].register = register;
         self.issue = (self.issue + 1) % self.buffer.len();
         ret
     }
 
-    fn insert(&mut self, pos: usize, result: u32) {
+    fn insert(&mut self, pos: usize, result: ExecResult) {
         self.buffer[pos].result = Some((result));
     }
 
-    fn get_writeback(&mut self) -> Option<(u32, usize)> {
+    fn get_writeback(&mut self) -> ReorderBufferResult {
         if let Some(result) = self.buffer[self.commit].result {
             let rob_ret = self.commit;
+            let reg_ret = self.buffer[self.commit].register;
             self.buffer[self.commit].clear();
             self.commit = (self.commit + 1) % self.buffer.len();
-            Some((result, rob_ret))
+            match result {
+                ExecResult::Value(val) => {
+                    ReorderBufferResult::Writeback(val, rob_ret, reg_ret)
+                }
+                ExecResult::Branch(branch) => {
+                    ReorderBufferResult::Branch(reg_ret, branch)
+                }
+            }
         } else {
-            None
+            ReorderBufferResult::None
         }
     }
 }
@@ -878,6 +955,12 @@ impl Registers {
         }
     }
 
+    fn clear_rat(&mut self) {
+        for i in 0..self.rat.len() {
+            self.rat[i] = None;
+        }
+    }
+
     fn read_reg(&self, reg: usize) -> Operand {
         match self.rat[reg] {
             None => {
@@ -893,13 +976,11 @@ impl Registers {
         self.rat[reg] = Some(new_owner);
     }
 
-    fn write_result(&mut self, value: u32, rob: usize) {
-        for i in 0..self.rat.len() {
-            if let Some(robt) = self.rat[i] {
-                if robt == rob {
-                    self.gprs[i] = value;
-                    self.rat[i] = None;
-                }
+    fn write_result(&mut self, value: u32, rob: usize, register: usize) {
+        self.gprs[register] = value;
+        if let Some(rat_entry) = self.rat[register] {
+            if rat_entry == rob {
+                self.rat[register] = None;
             }
         }
     }
