@@ -10,6 +10,7 @@ const MEM_SIZE: usize = 52;
 const NUM_RS: usize = 6;
 const NUM_ALUS: usize = 2;
 const NUM_MULTS: usize = 1;
+const MAX_PREDICTIONS: usize = 10;
 
 fn main() {
     println!("Hello, world!");
@@ -184,10 +185,34 @@ fn decode(cpu: &mut CPU) -> u32 {
                                 },
                                 EncodedInstruction::Blt(s, t, inst) => {
                                     //DecodedInstruction::Blt(registers.read_reg(s), registers.read_reg(t), inst)
+                                    //DecodedInstruction::Beq(registers.read_reg(s), registers.read_reg(t), inst)
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(0);
+                                        let predict_taken = cpu.branch_predictor.predict(Op::Blt, rob_pos, inst, pc + 1);
+                                        let operand1 = cpu.read_reg(s);
+                                        let operand2 = cpu.read_reg(t);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Blt, r, rob_pos);
+                                        cpu.decode_unit.pop_instruction();
+                                        //TODO SET THE PC IF PREDICTION IS TRUE
+                                        if predict_taken {
+                                            cpu.fetch_unit.speculate(inst);
+                                        }
+                                    }
+                                    else {
+                                        // do nothing until next cycle
+                                    }
                                     1
                                 },
                                 EncodedInstruction::Div(d, s, t)    => {
                                     //DecodedInstruction::Div(d, registers.read_reg(s), registers.read_reg(t))
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
+                                        let operand1 = cpu.read_reg(s);
+                                        let operand2 = cpu.read_reg(t);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Div, r, rob_pos);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
                                     1
                                 },
                                 EncodedInstruction::J(inst)         => {
@@ -209,6 +234,12 @@ fn decode(cpu: &mut CPU) -> u32 {
                                 },
                                 EncodedInstruction::Ldc(d, imm)     => {
                                     //DecodedInstruction::Mov(d, imm)
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(Operand::Value(imm), Operand::None, Op::Mov, r, rob_pos);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
                                     1
                                 },
                                 EncodedInstruction::Li(d, imm)      => {
@@ -221,10 +252,25 @@ fn decode(cpu: &mut CPU) -> u32 {
                                 },
                                 EncodedInstruction::Mod(d, s, t)    => {
                                     //DecodedInstruction::Mod(d, registers.read_reg(s), registers.read_reg(t))
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
+                                        let operand1 = cpu.read_reg(s);
+                                        let operand2 = cpu.read_reg(t);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, operand2, Op::Mod, r, rob_pos);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
                                     1
                                 },
                                 EncodedInstruction::Mov(d, s)       => {
                                     //DecodedInstruction::Mov(d, registers.read_reg(s))
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
+                                        let operand1 = cpu.read_reg(s);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, Operand::None, Op::Mov, r, rob_pos);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
                                     1
                                 },
                                 EncodedInstruction::Mult(d, s, t)   => {
@@ -336,11 +382,17 @@ fn decode(cpu: &mut CPU) -> u32 {
                                         break; //found a functional unit to execute this RS 
                                     }
                                 },
+                                Operand::None => {
+                                    println!("Dispatching {} = {:?} {} from {}", cpu.exec_unit.rs_sts[rs].rob_entry, cpu.exec_unit.rs_sts[rs].operation, x, rs );
+                                    if fu.dispatch(x, 0, cpu.exec_unit.rs_sts[rs].operation, cpu.exec_unit.rs_sts[rs].rob_entry) {
+                                        cpu.exec_unit.rs_sts[rs].free();
+                                        break; //found a functional unit to execute this RS 
+                                    }
+                                }
                                 _ => {
                                     panic!("OPERANDS INCORRECT1");
                                     //break;
                                 },
-                                _ => (),
                             };
                         },
                         Operand::None => {
@@ -643,11 +695,13 @@ enum Op {
     Or,
     Sub,
     Xor,
-    Load,
+    Mov,
     Mult,
     Div,
+    Mod,
     J,
     Beq,
+    Blt,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -708,6 +762,10 @@ impl FunctionalUnit {
                         self.cycles = 1;
                         true
                     }
+                    Op::Mov => {
+                        self.cycles = 1;
+                        true
+                    }
                     _ => {
                         false
                     }
@@ -723,6 +781,10 @@ impl FunctionalUnit {
                         self.cycles = 3;
                         true
                     },
+                    Op::Mod => {
+                        self.cycles = 3;
+                        true
+                    }
                     _ => false,
                 }
             },
@@ -735,6 +797,10 @@ impl FunctionalUnit {
                     },
                     Op::Beq => {
                         println!("I ACCEPT DEAR SIR");
+                        self.cycles = 1;
+                        true
+                    }
+                    Op::Blt => {
                         self.cycles = 1;
                         true
                     }
@@ -774,6 +840,9 @@ impl FunctionalUnit {
                             Op::Xor => {
                                 Some(ExecResult::Value(self.op1 ^ self.op2))
                             },
+                            Op::Mov => {
+                                Some(ExecResult::Value(self.op1))
+                            }
                             _ => {
                                 panic!("Not an ALU operation {:?}", self.operation);
                             },
@@ -787,6 +856,9 @@ impl FunctionalUnit {
                             Op::Mult => {
                                 Some(ExecResult::Value(self.op1 * self.op2))
                             },
+                            Op::Mod => {
+                                Some(ExecResult::Value(self.op1 % self.op2))
+                            }
                             _ => {
                                 panic!("Not a MULTIPLIER operation {:?}", self.operation);
                             },
@@ -801,6 +873,9 @@ impl FunctionalUnit {
                             Op::Beq => {
                                 Some(ExecResult::Branch(self.op1 == self.op2))
                             },
+                            Op::Blt => {
+                                Some(ExecResult::Branch(self.op1 < self.op2))
+                            }
                             _ => {
                                panic!("Not a BRANCH operation {:?}", self.operation); 
                             }
@@ -1008,6 +1083,10 @@ impl BranchPredictor {
             Op::Beq => {
                 self.insert(rob_pos, Prediction::new(false, taken_pc, not_taken_pc));
                 false 
+            }
+            Op::Blt => {
+                self.insert(rob_pos, Prediction::new(false, taken_pc, not_taken_pc));
+                false
             }
             _ => {
                 panic!("Not implemented yet {:?}", operation);
