@@ -7,9 +7,9 @@ use std::fmt;
 
 
 const MEM_SIZE: usize = 52;
-const NUM_RS: usize = 6;
+const NUM_RS: usize = 16;
 const NUM_ALUS: usize = 2;
-const NUM_MULTS: usize = 1;
+const NUM_MULTS: usize = 2;
 const MAX_PREDICTIONS: usize = 10;
 
 fn main() {
@@ -23,8 +23,6 @@ fn main() {
     let assembly: Vec<String> = buf.lines().map(|l| l.expect("Could not parse line")).collect();
 
     let instructions = assemble(assembly);
-
-    let num_instructions = instructions.len();
 
     //let mut memory: [u32; MEM_SIZE] = [1; MEM_SIZE];
 
@@ -49,9 +47,9 @@ fn main() {
     }
 
     println!("Registers Final Values: {:?}", cpu.registers.gprs);
-    println!("Instructions executed: {}", num_instructions);
+    println!("Instructions executed: {}", cpu.rob.instructions_committed);
     println!("Number of cycles: {}", cycles);
-    println!("Instructions per cycle: {:.2}", (num_instructions as f32)  / (cycles as f32));
+    println!("Instructions per cycle: {:.2}", (cpu.rob.instructions_committed as f32)  / (cycles as f32));
     //println!("End: {:?}", regs);
     //for i in 0..30 {
     //    println!("MEM[{}]: {}", i, memory[i]);
@@ -649,6 +647,7 @@ impl ExecUnit {
         }
 
         fus.push(FunctionalUnit::new(FUType::Branch));
+        fus.push(FunctionalUnit::new(FUType::Branch));
 
         let mut rs_sts: Vec<ReservationStation> = Vec::new();
         for _ in 0..NUM_RS {
@@ -738,7 +737,6 @@ impl FunctionalUnit {
     }
 
     fn dispatch(&mut self, o1: u32, o2: u32, operation: Op, rob_entry: usize) -> bool {
-        println!("DISPATCH {:?}", operation);
         let correct_type = match self.fu_type {
             FUType::ALU => {
                 match operation {
@@ -809,6 +807,7 @@ impl FunctionalUnit {
             },
         };
         if correct_type {
+            println!("DISPATCHING {:?}", operation);
             self.op1 = o1;
             self.op2 = o2;
             self.is_busy = true;
@@ -1097,23 +1096,23 @@ impl BranchPredictor {
 
     fn resolve_prediction(&mut self, taken: bool, rob_pos: usize) -> (bool, usize) {
         //TODO Need to remove from table also
-        for &mut entry in &mut self.table {
-            if let Some((rob, prediction)) = entry {
+        for entry in 0..self.table.len() {
+            if let Some((rob, prediction)) = self.table[entry] {
                 if rob == rob_pos {
                     if prediction.predict_taken == taken {
-                        //entry = None;
+                        self.table[entry] = None;
                         return (true, 0);
                     } else {
                         if prediction.predict_taken {
                             //predicted true but actually came to be false
                             println!("BRANCH MISPREDICTED! Guessed taken.");
-                            //entry = None;
+                            self.table[entry] = None;
                             return (false, prediction.not_taken_pc);
                         }
                         else {
                             //predict false but was true
                             println!("BRANCH MISPREDICTED! Guessed not taken.");
-                            //entry = None;
+                            self.table[entry] = None;
                             return (false, prediction.taken_pc)
                         }
                     }
@@ -1159,6 +1158,7 @@ impl ReorderBufferEntry {
 
 #[derive(Debug)]
 struct ReorderBuffer {
+    instructions_committed: usize,
     commit: usize,
     issue: usize,
     buffer: [ReorderBufferEntry; 32],
@@ -1167,6 +1167,7 @@ struct ReorderBuffer {
 impl ReorderBuffer {
     fn new() -> ReorderBuffer {
         ReorderBuffer {
+            instructions_committed: 0,
             commit: 0,
             issue: 0,
             buffer: [ReorderBufferEntry::new() ; 32],
@@ -1198,6 +1199,7 @@ impl ReorderBuffer {
 
     fn get_commit(&mut self) -> ReorderBufferResult {
         if let Some(result) = self.buffer[self.commit].result {
+            self.instructions_committed += 1;
             let rob_ret = self.commit;
             let reg_ret = self.buffer[self.commit].register;
             self.buffer[self.commit].clear();
