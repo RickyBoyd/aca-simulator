@@ -41,7 +41,7 @@ fn main() {
         println!("");
         println!("CPU: {:?}", cpu);
         cycles += 1;
-        if (c_res + e_res + d_res + f_res) == 0 || cycles > 20 {
+        if (c_res + e_res + d_res + f_res) == 0 {
             break;
         }
     }
@@ -181,9 +181,25 @@ fn decode(cpu: &mut CPU) -> u32 {
                                     }
                                     1
                                 },
+                                EncodedInstruction::Beqz(s, inst) => {
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(0);
+                                        let predict_taken = cpu.branch_predictor.predict(Op::Blt, rob_pos, inst, pc + 1);
+                                        let operand1 = cpu.read_reg(s);
+                                        cpu.exec_unit.issue(operand1, Operand::None, Op::Beqz, r, rob_pos);
+                                        cpu.decode_unit.pop_instruction();
+                                        //TODO SET THE PC IF PREDICTION IS TRUE
+                                        if predict_taken {
+                                            cpu.fetch_unit.speculate(inst);
+                                        }
+                                    }
+                                    else {
+                                        // do nothing until next cycle
+                                    }
+                                    1
+                                }
                                 EncodedInstruction::Blt(s, t, inst) => {
                                     //DecodedInstruction::Blt(registers.read_reg(s), registers.read_reg(t), inst)
-                                    //DecodedInstruction::Beq(registers.read_reg(s), registers.read_reg(t), inst)
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
                                         let rob_pos = cpu.rob.commit_to(0);
                                         let predict_taken = cpu.branch_predictor.predict(Op::Blt, rob_pos, inst, pc + 1);
@@ -299,10 +315,30 @@ fn decode(cpu: &mut CPU) -> u32 {
                                 },
                                 EncodedInstruction::Sl(d, s, t)     => {
                                     //DecodedInstruction::Sl(d, registers.read_reg(s), t)
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
+                                        let operand1 = cpu.read_reg(s);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, Operand::Value(t), Op::Sl, r, rob_pos);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
+                                    else {
+                                        // do nothing until next cycle
+                                    }
                                     1
                                 },
                                 EncodedInstruction::Sr(d, s, t)     => {
                                     //DecodedInstruction::Sr(d, registers.read_reg(s), t)
+                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
+                                        let rob_pos = cpu.rob.commit_to(d);
+                                        let operand1 = cpu.read_reg(s);
+                                        cpu.registers.set_owner(d, rob_pos);
+                                        cpu.exec_unit.issue(operand1, Operand::Value(t), Op::Sr, r, rob_pos);
+                                        cpu.decode_unit.pop_instruction();
+                                    }
+                                    else {
+                                        // do nothing until next cycle
+                                    }
                                     1
                                 },
                                 EncodedInstruction::Sub(d, s, t)    => {
@@ -695,11 +731,14 @@ enum Op {
     Sub,
     Xor,
     Mov,
+    Sr,
+    Sl,
     Mult,
     Div,
     Mod,
     J,
     Beq,
+    Beqz,
     Blt,
 }
 
@@ -764,6 +803,14 @@ impl FunctionalUnit {
                         self.cycles = 1;
                         true
                     }
+                    Op::Sl => {
+                        self.cycles = 1;
+                        true
+                    }
+                    Op::Sr => {
+                        self.cycles = 1;
+                        true
+                    }
                     _ => {
                         false
                     }
@@ -794,6 +841,11 @@ impl FunctionalUnit {
                         true
                     },
                     Op::Beq => {
+                        println!("I ACCEPT DEAR SIR");
+                        self.cycles = 1;
+                        true
+                    }
+                    Op::Beqz => {
                         println!("I ACCEPT DEAR SIR");
                         self.cycles = 1;
                         true
@@ -842,6 +894,12 @@ impl FunctionalUnit {
                             Op::Mov => {
                                 Some(ExecResult::Value(self.op1))
                             }
+                            Op::Sr => {
+                                Some(ExecResult::Value(self.op1 >> self.op2))
+                            }
+                            Op::Sl => {
+                                Some(ExecResult::Value(self.op1 << self.op2))
+                            }
                             _ => {
                                 panic!("Not an ALU operation {:?}", self.operation);
                             },
@@ -872,6 +930,9 @@ impl FunctionalUnit {
                             Op::Beq => {
                                 Some(ExecResult::Branch(self.op1 == self.op2))
                             },
+                            Op::Beqz => {
+                                Some(ExecResult::Branch(self.op1 == 0))
+                            }
                             Op::Blt => {
                                 Some(ExecResult::Branch(self.op1 < self.op2))
                             }
@@ -1083,6 +1144,10 @@ impl BranchPredictor {
                 self.insert(rob_pos, Prediction::new(false, taken_pc, not_taken_pc));
                 false 
             }
+            Op::Beqz => {
+                self.insert(rob_pos, Prediction::new(false, taken_pc, not_taken_pc));
+                false 
+            }
             Op::Blt => {
                 self.insert(rob_pos, Prediction::new(false, taken_pc, not_taken_pc));
                 false
@@ -1272,6 +1337,7 @@ enum EncodedInstruction {
     And(usize, usize, usize),
     Andi(usize, usize, u32),
     Beq(usize, usize, usize),
+    Beqz(usize, usize),
     Blt(usize, usize, usize),
     Div(usize, usize, usize),
     J(usize),
@@ -1316,6 +1382,10 @@ fn assemble(assembly: Vec<String>) -> Vec<EncodedInstruction> {
             "BEQ" => {
                 let (s, t, addr) = three_args(split_inst);
                 instructions.push(EncodedInstruction::Beq(s, t, addr));
+            }
+            "BEQZ" => {
+                let (s, addr) = two_args(split_inst);
+                instructions.push(EncodedInstruction::Beqz(s, addr));
             }
             "BLT" => {
                 let (s, t, addr) = three_args(split_inst);
