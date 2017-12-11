@@ -12,6 +12,8 @@ const NUM_ALUS: usize = 2;
 const NUM_MULTS: usize = 2;
 const MAX_PREDICTIONS: usize = 10;
 const FETCH_WIDTH: usize = 2;
+const DECODE_WIDTH: usize = 2;
+
 
 fn main() {
     println!("Hello, world!");
@@ -102,28 +104,25 @@ fn fetch(cpu: &mut CPU) -> u32 {
 
 fn decode(cpu: &mut CPU) -> u32 {
     let ret = match cpu.decode_unit.stalled {
-        true => {
-            0
-        },
+        true => (),
         false => {
+            for _ in 0..1 {
             let possible_instruction = cpu.decode_unit.get_next_instruction();
             match possible_instruction {
                 Some((pc, instruction)) => {
                     let reset = cpu.decode_unit.reset;
                     match reset {
                         true => {
+                            cpu.decode_unit.instruction_q.clear();
                             cpu.decode_unit.reset = false;
-                            1
                         },
                         false => {
                             match instruction {
                                 EncodedInstruction::Noop            => {
                                     cpu.decode_unit.pop_instruction();
-                                    1
                                 }
                                 EncodedInstruction::Halt            => {
-                                    cpu.decode_unit.pop_instruction();
-                                    0
+                                    
                                 },
                                 EncodedInstruction::Addi(d, s, imm) => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -135,10 +134,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
                                 EncodedInstruction::Add(d, s, t)    => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -150,10 +145,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
                                 EncodedInstruction::And(d, s, t)    => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -165,10 +156,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
                                 EncodedInstruction::Andi(d, s, imm) => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -180,10 +167,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
                                 EncodedInstruction::Beq(s, t, inst) => {
                                     //DecodedInstruction::Beq(registers.get_operand(s), registers.get_operand(t), inst)
@@ -201,10 +184,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             }
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
                                 EncodedInstruction::Beqz(s, inst) => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -220,10 +199,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             }
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 }
                                 EncodedInstruction::Blt(s, t, inst) => {
                                     //DecodedInstruction::Blt(registers.get_operand(s), registers.get_operand(t), inst)
@@ -241,10 +216,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             }
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
                                 EncodedInstruction::Div(d, s, t)    => {
                                     //DecodedInstruction::Div(d, registers.get_operand(s), registers.get_operand(t))
@@ -257,7 +228,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    1
                                 },
                                 EncodedInstruction::J(inst)         => {
                                     //DecodedInstruction::J(inst)
@@ -273,10 +243,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             }
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
                                 EncodedInstruction::Ldc(d, imm)     => {
                                     //DecodedInstruction::Mov(d, imm)
@@ -287,7 +253,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    1
                                 },
                                 EncodedInstruction::Lw(addr, val)        => {
                                     //DecodedInstruction::Load(d, registers.get_operand(t))
@@ -300,7 +265,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                     } else {
                                         println!("NO ROB SPACE");
                                     }
-                                    1
                                 },
                                 EncodedInstruction::Mod(d, s, t)    => {
                                     //DecodedInstruction::Mod(d, registers.get_operand(s), registers.get_operand(t))
@@ -313,7 +277,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    1
                                 },
                                 EncodedInstruction::Mov(d, s)       => {
                                     //DecodedInstruction::Mov(d, registers.get_operand(s))
@@ -325,7 +288,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    1
                                 },
                                 EncodedInstruction::Mult(d, s, t)   => {
                                     //DecodedInstruction::Mult(d, registers.get_operand(s), registers.get_operand(t))
@@ -338,7 +300,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    1
                                 },
                                 EncodedInstruction::Or(d, s, t)     => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -350,10 +311,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
                                 EncodedInstruction::Sl(d, s, t)     => {
                                     //DecodedInstruction::Sl(d, registers.get_operand(s), t)
@@ -365,10 +322,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
                                 EncodedInstruction::Sr(d, s, t)     => {
                                     //DecodedInstruction::Sr(d, registers.get_operand(s), t)
@@ -380,10 +333,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
                                 EncodedInstruction::Sub(d, s, t)    => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -395,10 +344,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
                                 EncodedInstruction::Subi(d, s, imm) => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -410,10 +355,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
                                 EncodedInstruction::Sw(addr, dest)        => {
                                     if let Some(rob_pos) = cpu.rob.commit_to_store(dest) {
@@ -423,7 +364,6 @@ fn decode(cpu: &mut CPU) -> u32 {
                                         cpu.lsq.issue(LSQOp::S, pc, rob_pos, operand1, operand2);
                                         cpu.decode_unit.pop_instruction();
                                     }
-                                    1
                                 },
                                 EncodedInstruction::Xor(d, s, t)    => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
@@ -435,16 +375,13 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             cpu.decode_unit.pop_instruction();
                                         }
                                     }
-                                    else {
-                                        // do nothing until next cycle
-                                    }
-                                    1
                                 },
-                            }
+                            };
                         },
-                    }
+                    };
                 },
-                None => 0,
+                None => (),
+            };
             }
         },
     };
@@ -505,8 +442,13 @@ fn decode(cpu: &mut CPU) -> u32 {
             cpu.exec_unit.mem_unit.dispatch(i);
         }
     }
-    
-    return ret;
+    if let Some((_, instruction)) = cpu.decode_unit.get_next_instruction() {
+        if let EncodedInstruction::Halt = instruction {
+            0
+        } else {
+            1
+        }
+    } else { 1 }
 }
 
 fn execute(cpu: &mut CPU, memory: &mut [u32; MEM_SIZE]) -> u32 {
@@ -532,7 +474,7 @@ fn writeback(cpu: &mut CPU) {
     for fu in 0..cpu.exec_unit.func_units.len() {
         if let Some((result, rob_entry)) = cpu.exec_unit.func_units[fu].get_result() {
             if !cpu.cdb_busy {
-                cpu.cdb_busy = true;
+                cpu.cdb_busy = false;
                 cpu.rob.insert(rob_entry, result);
 
                 //Resolve dependencies if there is any
