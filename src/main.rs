@@ -11,6 +11,7 @@ const NUM_RS: usize = 16;
 const NUM_ALUS: usize = 2;
 const NUM_MULTS: usize = 2;
 const MAX_PREDICTIONS: usize = 10;
+const FETCH_WIDTH: usize = 2;
 
 fn main() {
     println!("Hello, world!");
@@ -78,12 +79,16 @@ fn fetch(cpu: &mut CPU) -> u32 {
             1
         },
         false => {
-            let inst = cpu.fetch_unit.get_instruction();
-            cpu.decode_unit.add_instruction(inst, cpu.fetch_unit.pc);
-            cpu.fetch_unit.pc += 1;
+            let mut inst = EncodedInstruction::Halt;
+            for _ in 0..FETCH_WIDTH {
+                inst = cpu.fetch_unit.get_instruction();
+                cpu.decode_unit.add_instruction(inst, cpu.fetch_unit.pc);
+                cpu.fetch_unit.pc += 1;
 
-            println!("pc: {}", cpu.fetch_unit.pc);
-            println!("Fetched instruction: {:?}", inst);
+                println!("pc: {}", cpu.fetch_unit.pc);
+                println!("Fetched instruction: {:?}", inst);
+            }
+            
             
             if let EncodedInstruction::Halt = inst {
                 0
@@ -192,6 +197,7 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             //TODO SET THE PC IF PREDICTION IS TRUE
                                             if predict_taken {
                                                 cpu.fetch_unit.speculate(inst);
+                                                cpu.decode_unit.instruction_q.clear();
                                             }
                                         }
                                     }
@@ -210,6 +216,7 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             //TODO SET THE PC IF PREDICTION IS TRUE
                                             if predict_taken {
                                                 cpu.fetch_unit.speculate(inst);
+                                                cpu.decode_unit.instruction_q.clear();
                                             }
                                         }
                                     }
@@ -230,6 +237,7 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             //TODO SET THE PC IF PREDICTION IS TRUE
                                             if predict_taken {
                                                 cpu.fetch_unit.speculate(inst);
+                                                cpu.decode_unit.instruction_q.clear();
                                             }
                                         }
                                     }
@@ -261,6 +269,7 @@ fn decode(cpu: &mut CPU) -> u32 {
                                             //TODO SET THE PC IF PREDICTION IS TRUE
                                             if predict_taken {
                                                 cpu.fetch_unit.speculate(inst);
+                                                cpu.decode_unit.instruction_q.clear();
                                             }
                                         }
                                     }
