@@ -13,7 +13,7 @@ const NUM_MULTS: usize = 2;
 const MAX_PREDICTIONS: usize = 10;
 const FETCH_WIDTH: usize = 4;
 const DECODE_WIDTH: usize = 4;
-
+const COMMIT_WIDTH: usize = 4;
 
 fn main() {
     println!("Hello, world!");
@@ -63,8 +63,8 @@ fn main() {
     println!("Instructions per cycle: {:.2}", (cpu.rob.instructions_committed as f32)  / (cycles as f32));
     println!("Branch prediction accuracy: {:.2}", cpu.branch_predictor.accuracy());
     
-    for i in memory.iter() {
-        println!("{}", i);
+    for i in 0..30{
+        println!("{}", memory[i]);
     }
     //println!("End: {:?}", regs);
     //for i in 0..30 {
@@ -214,7 +214,7 @@ fn decode(cpu: &mut CPU) {
     }
 
     //Now check the LSQ if something can be executed
-    if !cpu.exec_unit.mem_unit.busy {
+    if cpu.exec_unit.mem_unit.finished() {
         if let Some(i) = cpu.lsq.get_next_instruction() {
             cpu.exec_unit.mem_unit.dispatch(i);
         }
@@ -269,7 +269,7 @@ fn writeback(cpu: &mut CPU) {
 }
 
 fn commit(cpu: &mut CPU) {
-    for _ in 0..4 {
+    for _ in 0..COMMIT_WIDTH {
         match cpu.rob.get_commit() {
             ReorderBufferResult::Writeback(res, rob, reg) => {
                 cpu.registers.write_result(res, rob, reg);
@@ -734,7 +734,6 @@ struct MemoryUnit {
     instruction: LSQEntry,
     cycles: u32,
     result: Option<u32>,
-    busy: bool,
 }
 
 impl MemoryUnit {
@@ -744,26 +743,33 @@ impl MemoryUnit {
             instruction: LSQEntry::new(LSQOp::S, 0, 0, Operand::None, Operand::None),
             cycles: 0,
             result: None,
-            busy: false,
         }
     }
 
     fn reset(&mut self) {
         self.cycles = 0;
         self.result = None;
-        self.busy = false;
     }
 
     fn finished(&self) -> bool {
-        !self.busy
+        if let None = self.result {
+            if self.cycles == 0{
+                true
+            } else { false }
+            
+        } else { false }
     }
 
-    fn dispatch(&mut self, next_instruction: LSQEntry) {
-        println!("Mem dispatch: {:?}", next_instruction);
-        self.instruction = next_instruction;
-        self.result = None;
-        self.busy = true;
-        self.cycles = 3;
+    fn dispatch(&mut self, next_instruction: LSQEntry) -> bool {
+        if let None = self.result {
+            if self.cycles == 0 {
+                println!("Mem dispatch: {:?}", next_instruction);
+                self.instruction = next_instruction;
+                self.result = None;
+                self.cycles = 3;
+                true
+            } else { false }
+        } else { false }
     }
 
     fn cycle(&mut self, memory: &mut [u32; MEM_SIZE]) {
@@ -775,8 +781,6 @@ impl MemoryUnit {
                         if let Operand::Value(value) = self.instruction.value {
                             if let Operand::Value(addr) = self.instruction.addr {
                                 memory[addr as usize] = value;
-                                //NOW need to set busy to false
-                                self.busy = false;
                             } else { panic!("Dispatched store without knowing the address {:?}", self.instruction.addr); }
                             
                         } else { panic!("Dispatched store without knowing the value {:?}", self.instruction.value); }
@@ -794,7 +798,7 @@ impl MemoryUnit {
     fn get_result(&mut self) -> Option<(usize, ExecResult)> {
         if let Some(result) = self.result {
             if self.cycles == 0 {
-                self.busy = false;
+                self.result = None;
                 Some((self.instruction.rob_entry, ExecResult::Value(result)))
             } else { None }
             
@@ -1283,13 +1287,14 @@ impl BranchPredictor {
         self.total_correct as f32 / self.total_predictions as f32
     }
 
-    fn insert(&mut self, rob_entry: usize, prediction: Prediction) {
+    fn insert(&mut self, rob_entry: usize, prediction: Prediction) -> bool {
         for i in 0..self.table.len() {
             if let None = self.table[i] {
                 self.table[i] = Some((rob_entry, prediction));
-                break;
+                return true;
             }
         }
+        return false;
     }
 
     fn predict(&mut self, operation: Op, rob_pos: usize, taken_pc: usize, not_taken_pc: usize) -> bool {
@@ -1317,6 +1322,12 @@ impl BranchPredictor {
         }
     }
 
+    fn clear_table(&mut self) {
+        for i in 0..self.table.len() {
+            self.table[i] = None;
+        }
+    }
+
     fn resolve_prediction(&mut self, taken: bool, rob_pos: usize) -> (bool, usize) {
         //TODO Need to remove from table also
         self.total_predictions += 1;
@@ -1325,19 +1336,22 @@ impl BranchPredictor {
                 if rob == rob_pos {
                     if prediction.predict_taken == taken {
                         self.total_correct += 1;
+                        println!("AM HERE. {} ", rob_pos);
+                        println!("SELF: {:?}", self);
                         self.table[entry] = None;
+                        println!("SELFAGAIN: {:?}", self);
                         return (true, 0);
                     } else {
                         if prediction.predict_taken {
                             //predicted true but actually came to be false
                             println!("BRANCH MISPREDICTED! Guessed taken.");
-                            self.table[entry] = None;
+                            self.clear_table();
                             return (false, prediction.not_taken_pc);
                         }
                         else {
                             //predict false but was true
                             println!("BRANCH MISPREDICTED! Guessed not taken.");
-                            self.table[entry] = None;
+                            self.clear_table();
                             return (false, prediction.taken_pc)
                         }
                     }
