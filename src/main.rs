@@ -146,10 +146,10 @@ fn decode(cpu: &mut CPU) {
                                 EncodedInstruction::Ldc(d, imm)     => {
                                     cpu.issue1_imm(d, imm, Op::Mov);
                                 },
-                                EncodedInstruction::Lw(addr, val)        => {
-                                    if let Some(rob_pos) = cpu.rob.commit_to(val) {
+                                EncodedInstruction::Lw(addr, dest)        => {
+                                    if let Some(rob_pos) = cpu.rob.commit_to(dest) {
                                         let operand1 = cpu.get_operand(addr);
-                                        cpu.registers.set_owner(val, rob_pos);
+                                        cpu.registers.set_owner(dest, rob_pos);
                                         cpu.lsq.issue(LSQOp::L, pc, rob_pos, operand1, Operand::None);
                                         cpu.decode_unit.pop_instruction();
                                     } else {
@@ -180,10 +180,10 @@ fn decode(cpu: &mut CPU) {
                                 EncodedInstruction::Subi(d, s, imm) => {
                                     cpu.issue_imm(d, s, imm, Op::Sub);
                                 },
-                                EncodedInstruction::Sw(addr, dest)        => {
+                                EncodedInstruction::Sw(addr, val)        => {
                                     if let Some(rob_pos) = cpu.rob.commit_to_store(dest) {
                                         let operand1 = cpu.get_operand(addr);
-                                        let operand2 = cpu.get_operand(dest);
+                                        let operand2 = cpu.get_operand(val);
                                         cpu.registers.set_owner(dest, rob_pos);
                                         cpu.lsq.issue(LSQOp::S, pc, rob_pos, operand1, operand2);
                                         cpu.decode_unit.pop_instruction();
