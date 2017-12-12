@@ -5,9 +5,9 @@ use std::env;
 use std::collections::LinkedList;
 use std::fmt;
 
-
+const ROB_SIZE: usize = 32;
 const MEM_SIZE: usize = 52;
-const NUM_RS: usize = 16;
+const NUM_RS: usize = 32;
 const NUM_ALUS: usize = 4;
 const NUM_MULTS: usize = 2;
 const MAX_PREDICTIONS: usize = 10;
@@ -38,13 +38,13 @@ fn main() {
     let mut cycles = 0;
 
     loop {
-        let c_res = commit(&mut cpu);
+        commit(&mut cpu);
         writeback(&mut cpu);
-        let e_res = execute(&mut cpu, &mut memory);
-        let d_res = decode(&mut cpu);
+        execute(&mut cpu, &mut memory);
+        decode(&mut cpu);
         fetch(&mut cpu);
+
         println!("CYCLE {}", cycles);
-        println!("{} : {} : {} ", c_res, e_res, d_res);
         println!("");
         println!("CPU: {:?}", cpu);
         cycles += 1;
@@ -89,16 +89,13 @@ fn fetch(cpu: &mut CPU) {
                         cpu.fetch_unit.pc += 1;
                     }
                 }
-
-                println!("pc: {}", cpu.fetch_unit.pc);
-                println!("Fetched instruction: {:?}", inst);
             }
         }
     }
 }
 
-fn decode(cpu: &mut CPU) -> u32 {
-    let ret = match cpu.decode_unit.stalled {
+fn decode(cpu: &mut CPU) {
+    match cpu.decode_unit.stalled {
         true => (),
         false => {
             for _ in 0..DECODE_WIDTH {
@@ -120,139 +117,36 @@ fn decode(cpu: &mut CPU) -> u32 {
                                     
                                 },
                                 EncodedInstruction::Addi(d, s, imm) => {
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            println!("ISSUEING {} = {} + {}", d, s, imm);
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = Operand::Value(imm);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::Add, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue_imm(d, s, imm, Op::Add);
                                 },
                                 EncodedInstruction::Add(d, s, t)    => {
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = cpu.get_operand(t);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::Add, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue(d, s, t, Op::Add);
                                 },
                                 EncodedInstruction::And(d, s, t)    => {
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = cpu.get_operand(t);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::And, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue(s, s, t, Op::And);
                                 },
                                 EncodedInstruction::Andi(d, s, imm) => {
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = Operand::Value(imm);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::And, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue_imm(d, s, imm, Op::And);
                                 },
                                 EncodedInstruction::Beq(s, t, inst) => {
-                                    //DecodedInstruction::Beq(registers.get_operand(s), registers.get_operand(t), inst)
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(0) {
-                                            let predict_taken = cpu.branch_predictor.predict(Op::Beq, rob_pos, inst, pc + 1);
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = cpu.get_operand(t);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::Beq, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                            //TODO SET THE PC IF PREDICTION IS TRUE
-                                            if predict_taken {
-                                                cpu.fetch_unit.speculate(inst);
-                                                cpu.decode_unit.instruction_q.clear();
-                                            }
-                                        }
-                                    }
+                                    cpu.issue_branch2(s, t, inst, Op::Beq, pc);
                                 },
                                 EncodedInstruction::Beqz(s, inst) => {
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(0) {
-                                            let predict_taken = cpu.branch_predictor.predict(Op::Blt, rob_pos, inst, pc + 1);
-                                            let operand1 = cpu.get_operand(s);
-                                            cpu.exec_unit.issue(operand1, Operand::None, Op::Beqz, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                            //TODO SET THE PC IF PREDICTION IS TRUE
-                                            if predict_taken {
-                                                cpu.fetch_unit.speculate(inst);
-                                                cpu.decode_unit.instruction_q.clear();
-                                            }
-                                        }
-                                    }
+                                    cpu.issue_branch1(s, inst, Op::Beqz, pc);
                                 }
                                 EncodedInstruction::Blt(s, t, inst) => {
-                                    //DecodedInstruction::Blt(registers.get_operand(s), registers.get_operand(t), inst)
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(0) {
-                                            let predict_taken = cpu.branch_predictor.predict(Op::Blt, rob_pos, inst, pc + 1);
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = cpu.get_operand(t);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::Blt, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                            //TODO SET THE PC IF PREDICTION IS TRUE
-                                            if predict_taken {
-                                                cpu.fetch_unit.speculate(inst);
-                                                cpu.decode_unit.instruction_q.clear();
-                                            }
-                                        }
-                                    }
+                                    cpu.issue_branch2(s, t, inst, Op::Blt, pc);
                                 },
                                 EncodedInstruction::Div(d, s, t)    => {
-                                    //DecodedInstruction::Div(d, registers.get_operand(s), registers.get_operand(t))
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = cpu.get_operand(t);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::Div, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue(d, s, t, Op::Div);
                                 },
                                 EncodedInstruction::J(inst)         => {
-                                    //DecodedInstruction::J(inst)
-                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(0) {
-                                            let predict_taken = cpu.branch_predictor.predict(Op::J, rob_pos, inst, pc + 1);
-                                            cpu.exec_unit.issue(Operand::None, Operand::None, Op::J, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                            //TODO SET THE PC IF PREDICTION IS TRUE
-                                            if predict_taken {
-                                                cpu.fetch_unit.speculate(inst);
-                                                cpu.decode_unit.instruction_q.clear();
-                                            }
-                                        }
-                                    }
+                                    cpu.issue_branch0(inst, Op::J, pc);
                                 },
                                 EncodedInstruction::Ldc(d, imm)     => {
-                                    //DecodedInstruction::Mov(d, imm)
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(Operand::Value(imm), Operand::None, Op::Mov, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue1_imm(d, imm, Op::Mov);
                                 },
                                 EncodedInstruction::Lw(addr, val)        => {
-                                    //DecodedInstruction::Load(d, registers.get_operand(t))
-                                    println!("LW DECODE");
                                     if let Some(rob_pos) = cpu.rob.commit_to(val) {
                                         let operand1 = cpu.get_operand(addr);
                                         cpu.registers.set_owner(val, rob_pos);
@@ -263,94 +157,28 @@ fn decode(cpu: &mut CPU) -> u32 {
                                     }
                                 },
                                 EncodedInstruction::Mod(d, s, t)    => {
-                                    //DecodedInstruction::Mod(d, registers.get_operand(s), registers.get_operand(t))
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = cpu.get_operand(t);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::Mod, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue(d, s, t, Op::Mod);
                                 },
                                 EncodedInstruction::Mov(d, s)       => {
-                                    //DecodedInstruction::Mov(d, registers.get_operand(s))
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, Operand::None, Op::Mov, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue1(d, s, Op::Mov);
                                 },
                                 EncodedInstruction::Mult(d, s, t)   => {
-                                    //DecodedInstruction::Mult(d, registers.get_operand(s), registers.get_operand(t))
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = cpu.get_operand(t);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::Mult, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue(d, s, t, Op::Mult);
                                 },
                                 EncodedInstruction::Or(d, s, t)     => {
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = cpu.get_operand(t);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::Or, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue(d, s, t, Op::Or);
                                 },
                                 EncodedInstruction::Sl(d, s, t)     => {
-                                    //DecodedInstruction::Sl(d, registers.get_operand(s), t)
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, Operand::Value(t), Op::Sl, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue_imm(d, s, t, Op::Sl);
                                 },
                                 EncodedInstruction::Sr(d, s, t)     => {
-                                    //DecodedInstruction::Sr(d, registers.get_operand(s), t)
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, Operand::Value(t), Op::Sr, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue_imm(d, s, t, Op::Sr);
                                 },
                                 EncodedInstruction::Sub(d, s, t)    => {
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = cpu.get_operand(t);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::Sub, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue(d, s, t, Op::Sub);
                                 },
                                 EncodedInstruction::Subi(d, s, imm) => {
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = Operand::Value(imm);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::Sub, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue_imm(d, s, imm, Op::Sub);
                                 },
                                 EncodedInstruction::Sw(addr, dest)        => {
                                     if let Some(rob_pos) = cpu.rob.commit_to_store(dest) {
@@ -362,15 +190,7 @@ fn decode(cpu: &mut CPU) -> u32 {
                                     }
                                 },
                                 EncodedInstruction::Xor(d, s, t)    => {
-                                    if let Some(r) = cpu.exec_unit.get_free_rs() {
-                                        if let Some(rob_pos) = cpu.rob.commit_to(d) {
-                                            let operand1 = cpu.get_operand(s);
-                                            let operand2 = cpu.get_operand(t);
-                                            cpu.registers.set_owner(d, rob_pos);
-                                            cpu.exec_unit.issue(operand1, operand2, Op::Xor, r, rob_pos);
-                                            cpu.decode_unit.pop_instruction();
-                                        }
-                                    }
+                                    cpu.issue(d, s, t, Op::Xor);
                                 },
                             };
                         },
@@ -378,15 +198,15 @@ fn decode(cpu: &mut CPU) -> u32 {
                 },
                 None => (),
             };
-            }
+            };
         },
     };
 
     //now dispatch
     for fu in &mut cpu.exec_unit.func_units {
         for rs in 0..cpu.exec_unit.rs_sts.len() {
-            //try to dipatch to functional unit
-            if cpu.exec_unit.rs_sts[rs].ready {
+                //try to dipatch to functional unit
+                if cpu.exec_unit.rs_sts[rs].ready {
                     match cpu.exec_unit.rs_sts[rs].o1 {
                         Operand::Value(x) => {
                             match cpu.exec_unit.rs_sts[rs].o2 {
@@ -437,34 +257,18 @@ fn decode(cpu: &mut CPU) -> u32 {
             cpu.exec_unit.mem_unit.dispatch(i);
         }
     }
-    if let Some((_, instruction)) = cpu.decode_unit.get_next_instruction() {
-        if let EncodedInstruction::Halt = instruction {
-            0
-        } else {
-            1
-        }
-    } else { 1 }
 }
 
-fn execute(cpu: &mut CPU, memory: &mut [u32; MEM_SIZE]) -> u32 {
+fn execute(cpu: &mut CPU, memory: &mut [u32; MEM_SIZE]) {
 
     for fu in &mut cpu.exec_unit.func_units {
         fu.cycle();
     }
 
     cpu.exec_unit.mem_unit.cycle(memory);
-
-    if cpu.exec_unit.finished() && cpu.lsq.finished() {
-        0
-    }
-    else {
-        1
-    }
-
 }
 
 fn writeback(cpu: &mut CPU) {
-
     for fu in 0..cpu.exec_unit.func_units.len() {
         if let Some((result, rob_entry)) = cpu.exec_unit.func_units[fu].get_result() {
             
@@ -502,8 +306,7 @@ fn writeback(cpu: &mut CPU) {
 
 }
 
-fn commit(cpu: &mut CPU) -> u32 {
-
+fn commit(cpu: &mut CPU) {
     for _ in 0..4 {
         match cpu.rob.get_commit() {
             ReorderBufferResult::Writeback(res, rob, reg) => {
@@ -529,12 +332,6 @@ fn commit(cpu: &mut CPU) -> u32 {
             }
             ReorderBufferResult::None => (),
         };
-    }
-    
-    if cpu.rob.is_empty() {
-        0
-    } else {
-        1
     }
 }
 
@@ -564,6 +361,98 @@ impl CPU {
             rob: ReorderBuffer::new(),
             branch_predictor: BranchPredictor::new(),
             lsq: LSQ::new(),
+        }
+    }
+
+    fn issue(&mut self, d: usize, s: usize, t: usize, op: Op) {
+        if let Some(r) = self.exec_unit.get_free_rs() {
+            if let Some(rob_pos) = self.rob.commit_to(d) {
+                let operand1 = self.get_operand(s);
+                let operand2 = self.get_operand(t);
+                self.registers.set_owner(d, rob_pos);
+                self.exec_unit.issue(operand1, operand2, op, r, rob_pos);
+                self.decode_unit.pop_instruction();
+            }
+        }
+    }
+
+    fn issue1(&mut self, d: usize, s: usize, op: Op) {
+        if let Some(r) = self.exec_unit.get_free_rs() {
+            if let Some(rob_pos) = self.rob.commit_to(d) {
+                let operand1 = self.get_operand(s);
+                self.registers.set_owner(d, rob_pos);
+                self.exec_unit.issue(operand1, Operand::None, op, r, rob_pos);
+                self.decode_unit.pop_instruction();
+            }
+        }
+    }
+
+    fn issue1_imm(&mut self, d: usize, imm: u32, op: Op) {
+        if let Some(r) = self.exec_unit.get_free_rs() {
+            if let Some(rob_pos) = self.rob.commit_to(d) {
+                self.registers.set_owner(d, rob_pos);
+                self.exec_unit.issue(Operand::Value(imm), Operand::None, op, r, rob_pos);
+                self.decode_unit.pop_instruction();
+            }
+        }
+    }
+
+    fn issue_imm(&mut self, d: usize, s: usize, imm: u32, op: Op) {
+        if let Some(r) = self.exec_unit.get_free_rs() {
+            if let Some(rob_pos) = self.rob.commit_to(d) {
+                let operand1 = self.get_operand(s);
+                self.registers.set_owner(d, rob_pos);
+                self.exec_unit.issue(operand1, Operand::Value(imm), op, r, rob_pos);
+                self.decode_unit.pop_instruction();
+            }
+        }
+    }
+
+    fn issue_branch0(&mut self, inst: usize, op: Op, pc: usize) {
+        if let Some(r) = self.exec_unit.get_free_rs() {
+            if let Some(rob_pos) = self.rob.commit_to(0) {
+                let predict_taken = self.branch_predictor.predict(op, rob_pos, inst, pc + 1);
+                self.exec_unit.issue(Operand::None, Operand::None, op, r, rob_pos);
+                self.decode_unit.pop_instruction();
+                // set the pc if branch is predicted taken
+                if predict_taken {
+                    self.fetch_unit.speculate(inst);
+                    self.decode_unit.instruction_q.clear();
+                }
+            }
+        }
+    }
+
+    fn issue_branch1(&mut self, s: usize, inst: usize, op: Op, pc: usize) {
+        if let Some(r) = self.exec_unit.get_free_rs() {
+            if let Some(rob_pos) = self.rob.commit_to(0) {
+                let predict_taken = self.branch_predictor.predict(op, rob_pos, inst, pc + 1);
+                let operand1 = self.get_operand(s);
+                self.exec_unit.issue(operand1, Operand::None, op, r, rob_pos);
+                self.decode_unit.pop_instruction();
+                // set the pc if branch is predicted taken
+                if predict_taken {
+                    self.fetch_unit.speculate(inst);
+                    self.decode_unit.instruction_q.clear();
+                }
+            }
+        }
+    }
+
+    fn issue_branch2(&mut self, s: usize, t: usize, inst: usize, op: Op, pc: usize) {
+        if let Some(r) = self.exec_unit.get_free_rs() {
+            if let Some(rob_pos) = self.rob.commit_to(0) {
+                let predict_taken = self.branch_predictor.predict(op, rob_pos, inst, pc + 1);
+                let operand1 = self.get_operand(s);
+                let operand2 = self.get_operand(t);
+                self.exec_unit.issue(operand1, operand2, op, r, rob_pos);
+                self.decode_unit.pop_instruction();
+                // set the pc if branch is predicted taken
+                if predict_taken {
+                    self.fetch_unit.speculate(inst);
+                    self.decode_unit.instruction_q.clear();
+                }
+            }
         }
     }
 
@@ -607,7 +496,6 @@ impl CPU {
     }
 
     fn reset(&mut self) {
-        println!("Should defs happen");
         self.registers.clear_rat();
         self.exec_unit.reset();
         self.decode_unit.reset();
@@ -902,7 +790,6 @@ impl MemoryUnit {
     }
 
     fn reset(&mut self) {
-        println!("MEM UNIT RESET");
         self.cycles = 0;
         self.result = None;
         self.busy = false;
@@ -1088,16 +975,13 @@ impl FunctionalUnit {
             },
         };
         if correct_type {
-            println!("DISPATCHING {:?}", operation);
             if self.cycles == 0 {
                 self.op1 = o1;
                 self.op2 = o2;
                 self.operation = operation;
                 self.rob_entry = rob_entry;
                 self.set_cycles();
-                println!("YEO {:?}", self);
             }  else {
-                println!("HERE ELSE");
                 self.op1_next = o1;
                 self.op2_next = o2;
                 self.operation_next = operation;
@@ -1173,7 +1057,6 @@ impl FunctionalUnit {
     }
 
     fn cycle(&mut self) {
-        println!("\n\nALU CYCLE: {:?}\n\n", self);
         if self.cycles > 0 {
             self.cycles -= 1;
             if self.cycles == 0 {
@@ -1228,11 +1111,9 @@ impl FunctionalUnit {
                     FUType::Branch => {
                         match self.operation {
                             Op::J => {
-                                println!("HEREALJBDHGACHAHIUD:UHDWOH:OWHJD"); 
                                 Some((self.rob_entry,ExecResult::Branch(true)))
                             },
                             Op::Beq => {
-                                println!("BEQ {} =? {}", self.op1, self.op2);
                                 Some((self.rob_entry,ExecResult::Branch(self.op1 == self.op2)))
                             },
                             Op::Beqz => {
@@ -1280,7 +1161,6 @@ impl FunctionalUnit {
 
     fn get_result(&mut self) -> Option<(ExecResult, usize)> {
         if let Some((r, x)) = self.result {
-            println!("GOT RESULT {:?}", self);
             self.result = None;
             Some((x, r))
         }
@@ -1525,7 +1405,7 @@ struct ReorderBuffer {
     instructions_committed: usize,
     commit: usize,
     issue: usize,
-    buffer: [ReorderBufferEntry; 32],
+    buffer: [ReorderBufferEntry; ROB_SIZE],
 }
 
 impl ReorderBuffer {
@@ -1534,12 +1414,11 @@ impl ReorderBuffer {
             instructions_committed: 0,
             commit: 0,
             issue: 0,
-            buffer: [ReorderBufferEntry::new() ; 32],
+            buffer: [ReorderBufferEntry::new() ; ROB_SIZE],
         }
     }
 
     fn is_empty(&self) -> bool {
-        println!("IS EMPTY {} {}", self.commit, self.issue);
         self.commit == self.issue
     }
 
