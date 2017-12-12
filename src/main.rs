@@ -181,10 +181,10 @@ fn decode(cpu: &mut CPU) {
                                     cpu.issue_imm(d, s, imm, Op::Sub);
                                 },
                                 EncodedInstruction::Sw(addr, val)        => {
-                                    if let Some(rob_pos) = cpu.rob.commit_to_store(dest) {
+                                    if let Some(rob_pos) = cpu.rob.commit_to_store(val) {
                                         let operand1 = cpu.get_operand(addr);
                                         let operand2 = cpu.get_operand(val);
-                                        cpu.registers.set_owner(dest, rob_pos);
+                                        cpu.registers.set_owner(val, rob_pos);
                                         cpu.lsq.issue(LSQOp::S, pc, rob_pos, operand1, operand2);
                                         cpu.decode_unit.pop_instruction();
                                     }
