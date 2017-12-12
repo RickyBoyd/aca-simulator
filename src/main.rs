@@ -8,11 +8,11 @@ use std::fmt;
 
 const MEM_SIZE: usize = 52;
 const NUM_RS: usize = 16;
-const NUM_ALUS: usize = 2;
+const NUM_ALUS: usize = 4;
 const NUM_MULTS: usize = 2;
 const MAX_PREDICTIONS: usize = 10;
-const FETCH_WIDTH: usize = 2;
-const DECODE_WIDTH: usize = 2;
+const FETCH_WIDTH: usize = 4;
+const DECODE_WIDTH: usize = 4;
 
 
 fn main() {
@@ -48,10 +48,10 @@ fn main() {
         println!("");
         println!("CPU: {:?}", cpu);
         cycles += 1;
-        for i in memory.iter() {
-            println!("{}", i);
-        }
-        if (c_res + e_res + d_res + f_res) == 0 {
+        // for i in memory.iter() {
+        //     println!("{}", i);
+        // }
+        if (c_res + e_res + d_res + f_res) == 0 && cpu.rob.is_empty() {
             break;
         }
     }
@@ -106,7 +106,7 @@ fn decode(cpu: &mut CPU) -> u32 {
     let ret = match cpu.decode_unit.stalled {
         true => (),
         false => {
-            for _ in 0..1 {
+            for _ in 0..DECODE_WIDTH {
             let possible_instruction = cpu.decode_unit.get_next_instruction();
             match possible_instruction {
                 Some((pc, instruction)) => {
@@ -127,6 +127,7 @@ fn decode(cpu: &mut CPU) -> u32 {
                                 EncodedInstruction::Addi(d, s, imm) => {
                                     if let Some(r) = cpu.exec_unit.get_free_rs() {
                                         if let Some(rob_pos) = cpu.rob.commit_to(d) {
+                                            println!("ISSUEING {} = {} + {}", d, s, imm);
                                             let operand1 = cpu.get_operand(s);
                                             let operand2 = Operand::Value(imm);
                                             cpu.registers.set_owner(d, rob_pos);
@@ -387,24 +388,23 @@ fn decode(cpu: &mut CPU) -> u32 {
     };
 
     //now dispatch
-    for rs in 0..cpu.exec_unit.rs_sts.len() {
-        if cpu.exec_unit.rs_sts[rs].ready {
+    for fu in &mut cpu.exec_unit.func_units {
+        for rs in 0..cpu.exec_unit.rs_sts.len() {
             //try to dipatch to functional unit
-            for fu in &mut cpu.exec_unit.func_units {
-                if !fu.is_busy() {
+            if cpu.exec_unit.rs_sts[rs].ready {
                     match cpu.exec_unit.rs_sts[rs].o1 {
                         Operand::Value(x) => {
                             match cpu.exec_unit.rs_sts[rs].o2 {
                                 Operand::Value(y) => {
-                                    println!("Dispatching {} = {} {:?} {} from {}", cpu.exec_unit.rs_sts[rs].rob_entry, x, cpu.exec_unit.rs_sts[rs].operation, y, rs );
                                     if fu.dispatch(x, y, cpu.exec_unit.rs_sts[rs].operation, cpu.exec_unit.rs_sts[rs].rob_entry) {
+                                        println!("Dispatching {} = {} {:?} {} from {}", cpu.exec_unit.rs_sts[rs].rob_entry, x, cpu.exec_unit.rs_sts[rs].operation, y, rs );
                                         cpu.exec_unit.rs_sts[rs].free();
                                         break; //found a functional unit to execute this RS 
                                     }
                                 },
                                 Operand::None => {
-                                    println!("Dispatching {} = {:?} {} from {}", cpu.exec_unit.rs_sts[rs].rob_entry, cpu.exec_unit.rs_sts[rs].operation, x, rs );
                                     if fu.dispatch(x, 0, cpu.exec_unit.rs_sts[rs].operation, cpu.exec_unit.rs_sts[rs].rob_entry) {
+                                        println!("Dispatching {} = {:?} {} from {}", cpu.exec_unit.rs_sts[rs].rob_entry, cpu.exec_unit.rs_sts[rs].operation, x, rs );
                                         cpu.exec_unit.rs_sts[rs].free();
                                         break; //found a functional unit to execute this RS 
                                     }
@@ -430,7 +430,7 @@ fn decode(cpu: &mut CPU) -> u32 {
                         },
                         _ => (),
                     }; 
-                }
+                
             }
         }
     }
@@ -469,12 +469,10 @@ fn execute(cpu: &mut CPU, memory: &mut [u32; MEM_SIZE]) -> u32 {
 }
 
 fn writeback(cpu: &mut CPU) {
-    cpu.cdb_busy = false;
 
     for fu in 0..cpu.exec_unit.func_units.len() {
         if let Some((result, rob_entry)) = cpu.exec_unit.func_units[fu].get_result() {
-            if !cpu.cdb_busy {
-                cpu.cdb_busy = false;
+            
                 cpu.rob.insert(rob_entry, result);
 
                 //Resolve dependencies if there is any
@@ -492,10 +490,6 @@ fn writeback(cpu: &mut CPU) {
                     },
                     _ => (),
                 }
-
-                //cpu.registers.write_result(result, rob_entry);
-                cpu.exec_unit.func_units[fu].free();
-            }
         }
     }
 
@@ -515,34 +509,32 @@ fn writeback(cpu: &mut CPU) {
 
 fn commit(cpu: &mut CPU) -> u32 {
 
-    for fu in 0..cpu.exec_unit.func_units.len() {
-        cpu.exec_unit.func_units[fu].update_busy();
-    }
-
-    match cpu.rob.get_commit() {
-        ReorderBufferResult::Writeback(res, rob, reg) => {
-            cpu.registers.write_result(res, rob, reg);
-        },
-        ReorderBufferResult::Branch(branch_taken, rob) => {
-            //ROB also beign used to store predicted PC for branches
-            //If not equal then a misprediction occurred
-            let (correctly_predicted, pc) = cpu.branch_predictor.resolve_prediction(branch_taken, rob);
-            // IF not correctly predicted
-            println!("Prediction correct: {} {}", correctly_predicted, pc);
-            if !correctly_predicted {
-                //Need to clear RSs, FUs, Instruction Queue
-                cpu.reset();
-                //Also need to set the PC correctly
-                cpu.fetch_unit.mispredict(pc);
-                //need to let branch predictor know of incorrect prediction
-                
+    for _ in 0..4 {
+        match cpu.rob.get_commit() {
+            ReorderBufferResult::Writeback(res, rob, reg) => {
+                cpu.registers.write_result(res, rob, reg);
+            },
+            ReorderBufferResult::Branch(branch_taken, rob) => {
+                //ROB also beign used to store predicted PC for branches
+                //If not equal then a misprediction occurred
+                let (correctly_predicted, pc) = cpu.branch_predictor.resolve_prediction(branch_taken, rob);
+                // IF not correctly predicted
+                println!("Prediction correct: {} {}", correctly_predicted, pc);
+                if !correctly_predicted {
+                    //Need to clear RSs, FUs, Instruction Queue
+                    cpu.reset();
+                    //Also need to set the PC correctly
+                    cpu.fetch_unit.mispredict(pc);
+                    //need to let branch predictor know of incorrect prediction
+                    break;
+                }
+            },
+            ReorderBufferResult::Store(r) => {
+                cpu.lsq.committed(r);
             }
-        },
-        ReorderBufferResult::Store(r) => {
-            cpu.lsq.committed(r);
-        }
-        ReorderBufferResult::None => (),
-    };
+            ReorderBufferResult::None => (),
+        };
+    }
     
     if cpu.rob.is_empty() {
         0
@@ -824,7 +816,6 @@ impl LSQ {
     }
 
     fn resolve_dependency(&mut self, result: u32, rob_entry: usize) {
-        println!("MEM DEP RES: {} {}", result, rob_entry);
         for entry in self.lsq.iter_mut() {
             // If the address of a load or store is dependign on an execution result
             if let Operand::Rob(r) = entry.addr {
@@ -984,63 +975,66 @@ enum FUType {
 #[derive(Debug)]
 struct FunctionalUnit {
     fu_type: FUType,
-    is_busy: bool,
     op1: u32,
     op2: u32,
     operation: Op,
     cycles: i32,
-    result: Option<ExecResult>,
+    result: Option<(usize, ExecResult)>,
     rob_entry: usize,
+    op1_next: u32,
+    op2_next: u32,
+    operation_next: Op,
+    rob_entry_next: usize,
 }
 
 impl FunctionalUnit {
     fn new(fu_type: FUType) -> FunctionalUnit {
         FunctionalUnit {
             fu_type: fu_type,
-            is_busy: false,
             op1: 0,
             op2: 0,
             operation: Op::None,
             cycles: 0,
             result: None,
             rob_entry: 0,
+            op1_next: 0,
+            op2_next: 0,
+            operation_next: Op::None,
+            rob_entry_next: 0,
         }
     }
 
     fn dispatch(&mut self, o1: u32, o2: u32, operation: Op, rob_entry: usize) -> bool {
+        if self.cycles > 1 {
+            if let Op::None = self.operation_next {
+                return false;
+            }
+        }
         let correct_type = match self.fu_type {
             FUType::ALU => {
                 match operation {
                     Op::Add => {
-                        self.cycles = 1;
                         true
                     },
                     Op::And => {
-                        self.cycles = 1;
                         true
                     },
                     Op::Or => {
-                        self.cycles = 1;
                         true
                     },
                     Op::Sub => {
-                        self.cycles = 1;
                         true
                     }
                     Op::Xor => {
-                        self.cycles = 1;
                         true
                     }
                     Op::Mov => {
-                        self.cycles = 1;
                         true
                     }
                     Op::Sl => {
-                        self.cycles = 1;
                         true
                     }
                     Op::Sr => {
-                        self.cycles = 1;
                         true
                     }
                     _ => {
@@ -1051,15 +1045,12 @@ impl FunctionalUnit {
             FUType::Multiplier => {
                 match operation {
                     Op::Mult => {
-                        self.cycles = 2;
                         true
                     },
                     Op::Div => {
-                        self.cycles = 3;
                         true
                     },
                     Op::Mod => {
-                        self.cycles = 3;
                         true
                     }
                     _ => false,
@@ -1068,22 +1059,15 @@ impl FunctionalUnit {
             FUType::Branch => {
                 match operation {
                     Op::J => {
-                        println!("I ACCEPT DEAR SIR");
-                        self.cycles = 1;
                         true
                     },
                     Op::Beq => {
-                        println!("I ACCEPT DEAR SIR");
-                        self.cycles = 1;
                         true
                     }
                     Op::Beqz => {
-                        println!("I ACCEPT DEAR SIR");
-                        self.cycles = 1;
                         true
                     }
                     Op::Blt => {
-                        self.cycles = 1;
                         true
                     }
                     _ => false,
@@ -1092,16 +1076,91 @@ impl FunctionalUnit {
         };
         if correct_type {
             println!("DISPATCHING {:?}", operation);
-            self.op1 = o1;
-            self.op2 = o2;
-            self.is_busy = true;
-            self.operation = operation;
-            self.rob_entry = rob_entry;
+            if self.cycles == 0 {
+                self.op1 = o1;
+                self.op2 = o2;
+                self.operation = operation;
+                self.rob_entry = rob_entry;
+                self.set_cycles();
+                println!("YEO {:?}", self);
+            }  else {
+                println!("HERE ELSE");
+                self.op1_next = o1;
+                self.op2_next = o2;
+                self.operation_next = operation;
+                self.rob_entry_next = rob_entry;
+            }
         }
         return correct_type;
     }
 
+    fn set_cycles(&mut self) {
+        match self.fu_type {
+            FUType::ALU => {
+                match self.operation {
+                    Op::Add => {
+                        self.cycles = 1;
+                    },
+                    Op::And => {
+                        self.cycles = 1;
+                    },
+                    Op::Or => {
+                        self.cycles = 1;
+                    },
+                    Op::Sub => {
+                        self.cycles = 1;
+                    }
+                    Op::Xor => {
+                        self.cycles = 1;
+                    }
+                    Op::Mov => {
+                        self.cycles = 1;
+                    }
+                    Op::Sl => {
+                        self.cycles = 1;
+                    }
+                    Op::Sr => {
+                        self.cycles = 1;
+                    }
+                    _ => (),
+                }
+            },
+            FUType::Multiplier => {
+                match self.operation {
+                    Op::Mult => {
+                        self.cycles = 2;
+                    },
+                    Op::Div => {
+                        self.cycles = 3;
+                    },
+                    Op::Mod => {
+                        self.cycles = 3;
+                    }
+                        _ => (),
+                    }
+            },
+            FUType::Branch => {
+                match self.operation {
+                    Op::J => {
+                        self.cycles = 1;
+                    },
+                    Op::Beq => {
+                        self.cycles = 1;
+                    }
+                    Op::Beqz => {
+                        self.cycles = 1;
+                    }
+                    Op::Blt => {
+                        self.cycles = 1;
+                    }
+                    _ => (),
+                }
+            },
+        };
+    }
+
     fn cycle(&mut self) {
+        println!("\n\nALU CYCLE: {:?}\n\n", self);
         if self.cycles > 0 {
             self.cycles -= 1;
             if self.cycles == 0 {
@@ -1109,28 +1168,28 @@ impl FunctionalUnit {
                     FUType::ALU => {
                         match self.operation {
                             Op::Add => {
-                                Some(ExecResult::Value(self.op1 + self.op2))
+                                Some((self.rob_entry,ExecResult::Value(self.op1 + self.op2)))
                             },
                             Op::And => {
-                                Some(ExecResult::Value(self.op1 & self.op2))
+                                Some((self.rob_entry,ExecResult::Value(self.op1 & self.op2)))
                             },
                             Op::Or => {
-                                Some(ExecResult::Value(self.op1 | self.op2))
+                                Some((self.rob_entry,ExecResult::Value(self.op1 | self.op2)))
                             },
                             Op::Sub => {
-                                Some(ExecResult::Value(self.op1 - self.op2))
+                                Some((self.rob_entry,ExecResult::Value(self.op1 - self.op2)))
                             },
                             Op::Xor => {
-                                Some(ExecResult::Value(self.op1 ^ self.op2))
+                                Some((self.rob_entry,ExecResult::Value(self.op1 ^ self.op2)))
                             },
                             Op::Mov => {
-                                Some(ExecResult::Value(self.op1))
+                                Some((self.rob_entry,ExecResult::Value(self.op1)))
                             }
                             Op::Sr => {
-                                Some(ExecResult::Value(self.op1 >> self.op2))
+                                Some((self.rob_entry,ExecResult::Value(self.op1 >> self.op2)))
                             }
                             Op::Sl => {
-                                Some(ExecResult::Value(self.op1 << self.op2))
+                                Some((self.rob_entry,ExecResult::Value(self.op1 << self.op2)))
                             }
                             _ => {
                                 panic!("Not an ALU operation {:?}", self.operation);
@@ -1140,13 +1199,13 @@ impl FunctionalUnit {
                     FUType::Multiplier => {
                         match self.operation {
                             Op::Div => {
-                                Some(ExecResult::Value(self.op1 / self.op2))
+                                Some((self.rob_entry,ExecResult::Value(self.op1 / self.op2)))
                             },
                             Op::Mult => {
-                                Some(ExecResult::Value(self.op1 * self.op2))
+                                Some((self.rob_entry,ExecResult::Value(self.op1 * self.op2)))
                             },
                             Op::Mod => {
-                                Some(ExecResult::Value(self.op1 % self.op2))
+                                Some((self.rob_entry,ExecResult::Value(self.op1 % self.op2)))
                             }
                             _ => {
                                 panic!("Not a MULTIPLIER operation {:?}", self.operation);
@@ -1157,17 +1216,17 @@ impl FunctionalUnit {
                         match self.operation {
                             Op::J => {
                                 println!("HEREALJBDHGACHAHIUD:UHDWOH:OWHJD"); 
-                                Some(ExecResult::Branch(true))
+                                Some((self.rob_entry,ExecResult::Branch(true)))
                             },
                             Op::Beq => {
                                 println!("BEQ {} =? {}", self.op1, self.op2);
-                                Some(ExecResult::Branch(self.op1 == self.op2))
+                                Some((self.rob_entry,ExecResult::Branch(self.op1 == self.op2)))
                             },
                             Op::Beqz => {
-                                Some(ExecResult::Branch(self.op1 == 0))
+                                Some((self.rob_entry,ExecResult::Branch(self.op1 == 0)))
                             }
                             Op::Blt => {
-                                Some(ExecResult::Branch(self.op1 < self.op2))
+                                Some((self.rob_entry, ExecResult::Branch(self.op1 < self.op2)))
                             }
                             _ => {
                                panic!("Not a BRANCH operation {:?}", self.operation); 
@@ -1176,8 +1235,20 @@ impl FunctionalUnit {
                     },
                 };
                 
+                match self.operation_next {
+                    Op::None => (),
+                    _ => {
+                        self.operation = self.operation_next;
+                        self.op1 = self.op1_next;
+                        self.op2 = self.op2_next;
+                        self.rob_entry = self.rob_entry_next;
+                        self.set_cycles();
+                        self.operation_next = Op::None;
+                    }
+                };
             }
         }
+        
     }
 
     fn finished(&self) -> bool {
@@ -1194,36 +1265,15 @@ impl FunctionalUnit {
         }
     }
 
-    fn get_result(&self) -> Option<(ExecResult, usize)> {
-        if let Some(x) = self.result {
-            Some((x, self.rob_entry))
+    fn get_result(&mut self) -> Option<(ExecResult, usize)> {
+        if let Some((r, x)) = self.result {
+            println!("GOT RESULT {:?}", self);
+            self.result = None;
+            Some((x, r))
         }
         else {
             None
         }
-    }
-    
-    fn is_busy(&self) -> bool {
-        self.is_busy
-    }
-
-    fn update_busy(&mut self) {
-        if let None = self.result {
-            if self.cycles == 0{
-                self.is_busy = false;
-            }
-            else{
-                self.is_busy = true;
-            } 
-        }
-        else {
-            self.is_busy = true;
-        }
-    }
-
-    fn free(&mut self) {
-        self.result = None;
-        self.is_busy = false; 
     }
 
     fn reset(&mut self) {
@@ -1476,6 +1526,7 @@ impl ReorderBuffer {
     }
 
     fn is_empty(&self) -> bool {
+        println!("IS EMPTY {} {}", self.commit, self.issue);
         self.commit == self.issue
     }
 
