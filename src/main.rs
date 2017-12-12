@@ -42,16 +42,16 @@ fn main() {
         writeback(&mut cpu);
         let e_res = execute(&mut cpu, &mut memory);
         let d_res = decode(&mut cpu);
-        let f_res = fetch(&mut cpu);
+        fetch(&mut cpu);
         println!("CYCLE {}", cycles);
-        println!("{} : {} : {} : {}", c_res, e_res, d_res, f_res);
+        println!("{} : {} : {} ", c_res, e_res, d_res);
         println!("");
         println!("CPU: {:?}", cpu);
         cycles += 1;
         // for i in memory.iter() {
         //     println!("{}", i);
         // }
-        if (c_res + e_res + d_res + f_res) == 0 && cpu.rob.is_empty() {
+        if cpu.finished() {
             break;
         }
     }
@@ -72,31 +72,26 @@ fn main() {
     //}
 }
 
-fn fetch(cpu: &mut CPU) -> u32 {
+fn fetch(cpu: &mut CPU) {
 
     match cpu.fetch_unit.reset {
         true => {
             cpu.fetch_unit.reset = false;
-
-            1
         },
         false => {
             let mut inst = EncodedInstruction::Halt;
             for _ in 0..FETCH_WIDTH {
                 inst = cpu.fetch_unit.get_instruction();
-                cpu.decode_unit.add_instruction(inst, cpu.fetch_unit.pc);
-                cpu.fetch_unit.pc += 1;
+                match inst {
+                    EncodedInstruction::Halt => (),
+                    _ => {
+                        cpu.decode_unit.add_instruction(inst, cpu.fetch_unit.pc);
+                        cpu.fetch_unit.pc += 1;
+                    }
+                }
 
                 println!("pc: {}", cpu.fetch_unit.pc);
                 println!("Fetched instruction: {:?}", inst);
-            }
-            
-            
-            if let EncodedInstruction::Halt = inst {
-                0
-            }
-            else {
-                1
             }
         }
     }
@@ -547,7 +542,6 @@ struct CPU {
     fetch_unit: FetchUnit,
     decode_unit: DecodeUnit,
     exec_unit: ExecUnit,
-    cdb_busy: bool,
     registers: Registers,
     rob: ReorderBuffer,
     branch_predictor: BranchPredictor,
@@ -556,7 +550,7 @@ struct CPU {
 
 impl fmt::Debug for CPU {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "cdb_busy {:}\n\nFetch unit: {:?}\n\nDecode Unit: {:?}\n\nExec Unit: {:?}\n\nRegisters: {:?}\n\nROB: {:?}\n\nPrediction Unit: {:?}\n\nLSQ: {:?}", self.cdb_busy, self.fetch_unit, self.decode_unit, self.exec_unit, self.registers, self.rob, self.branch_predictor, self.lsq)
+        write!(f, "Fetch unit: {:?}\n\nDecode Unit: {:?}\n\nExec Unit: {:?}\n\nRegisters: {:?}\n\nROB: {:?}\n\nPrediction Unit: {:?}\n\nLSQ: {:?}", self.fetch_unit, self.decode_unit, self.exec_unit, self.registers, self.rob, self.branch_predictor, self.lsq)
     }
 }
 
@@ -566,12 +560,19 @@ impl CPU {
             fetch_unit: FetchUnit::new(instructions),
             decode_unit: DecodeUnit::new(),
             exec_unit: ExecUnit::new(),
-            cdb_busy: false,
             registers: Registers::new(),
             rob: ReorderBuffer::new(),
             branch_predictor: BranchPredictor::new(),
             lsq: LSQ::new(),
         }
+    }
+
+    fn finished(&self) -> bool {
+        self.fetch_unit.finished() &&
+        self.decode_unit.finished() &&
+        self.exec_unit.finished() &&
+        self.rob.is_empty() &&
+        self.lsq.finished()
     }
 
     fn get_operand(&self, reg: usize) -> Operand {
@@ -635,6 +636,14 @@ impl FetchUnit {
         }
     }
 
+    fn finished(&self) -> bool {
+        if self.pc < self.instructions.len() {
+            false
+        } else {
+            true
+        }
+    }
+
     fn speculate(&mut self, spec_pc: usize) {
         self.reset = true;
         self.pc = spec_pc;
@@ -668,6 +677,10 @@ impl DecodeUnit {
             stalled: false,
             reset: false,
         }
+    }
+
+    fn finished(&self) -> bool {
+        self.instruction_q.is_empty()
     }
 
     fn reset(&mut self) {
@@ -744,7 +757,7 @@ impl ExecUnit {
         self.mem_unit.reset();
     }
 
-    fn finished(&mut self) -> bool {
+    fn finished(&self) -> bool {
         self.func_units.iter().all(|ref x| x.finished()) && self.rs_sts.iter().all(|ref x| x.finished() && self.mem_unit.finished())
     }
 
