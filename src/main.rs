@@ -95,163 +95,125 @@ fn fetch(cpu: &mut CPU) {
 }
 
 fn decode(cpu: &mut CPU) {
-    match cpu.decode_unit.stalled {
-        true => (),
-        false => {
-            for _ in 0..DECODE_WIDTH {
-            let possible_instruction = cpu.decode_unit.get_next_instruction();
-            match possible_instruction {
-                Some((pc, instruction)) => {
-                    let reset = cpu.decode_unit.reset;
-                    match reset {
-                        true => {
-                            cpu.decode_unit.instruction_q.clear();
-                            cpu.decode_unit.reset = false;
-                        },
-                        false => {
-                            match instruction {
-                                EncodedInstruction::Noop            => {
+
+    
+    for _ in 0..DECODE_WIDTH {
+        let possible_instruction = cpu.decode_unit.get_next_instruction();
+        match possible_instruction {
+            Some((pc, instruction)) => {
+                let reset = cpu.decode_unit.reset;
+                match reset {
+                    true => {
+                        cpu.decode_unit.instruction_q.clear();
+                        cpu.decode_unit.reset = false;
+                    },
+                    false => {
+                        match instruction {
+                            EncodedInstruction::Noop            => {
+                                cpu.decode_unit.pop_instruction();
+                            }
+                            EncodedInstruction::Halt            => {
+                                
+                            },
+                            EncodedInstruction::Addi(d, s, imm) => {
+                                cpu.issue_imm(d, s, imm, Op::Add);
+                            },
+                            EncodedInstruction::Add(d, s, t)    => {
+                                cpu.issue(d, s, t, Op::Add);
+                            },
+                            EncodedInstruction::And(d, s, t)    => {
+                                cpu.issue(s, s, t, Op::And);
+                            },
+                            EncodedInstruction::Andi(d, s, imm) => {
+                                cpu.issue_imm(d, s, imm, Op::And);
+                            },
+                            EncodedInstruction::Beq(s, t, inst) => {
+                                cpu.issue_branch2(s, t, inst, Op::Beq, pc);
+                            },
+                            EncodedInstruction::Beqz(s, inst) => {
+                                cpu.issue_branch1(s, inst, Op::Beqz, pc);
+                            }
+                            EncodedInstruction::Blt(s, t, inst) => {
+                                cpu.issue_branch2(s, t, inst, Op::Blt, pc);
+                            },
+                            EncodedInstruction::Div(d, s, t)    => {
+                                cpu.issue(d, s, t, Op::Div);
+                            },
+                            EncodedInstruction::J(inst)         => {
+                                cpu.issue_branch0(inst, Op::J, pc);
+                            },
+                            EncodedInstruction::Ldc(d, imm)     => {
+                                cpu.issue1_imm(d, imm, Op::Mov);
+                            },
+                            EncodedInstruction::Lw(addr, dest)        => {
+                                if let Some(rob_pos) = cpu.rob.commit_to(dest) {
+                                    let operand1 = cpu.get_operand(addr);
+                                    cpu.registers.set_owner(dest, rob_pos);
+                                    cpu.lsq.issue(LSQOp::L, pc, rob_pos, operand1, Operand::None);
+                                    cpu.decode_unit.pop_instruction();
+                                } else {
+                                    println!("NO ROB SPACE");
+                                }
+                            },
+                            EncodedInstruction::Mod(d, s, t)    => {
+                                cpu.issue(d, s, t, Op::Mod);
+                            },
+                            EncodedInstruction::Mov(d, s)       => {
+                                cpu.issue1(d, s, Op::Mov);
+                            },
+                            EncodedInstruction::Mult(d, s, t)   => {
+                                cpu.issue(d, s, t, Op::Mult);
+                            },
+                            EncodedInstruction::Or(d, s, t)     => {
+                                cpu.issue(d, s, t, Op::Or);
+                            },
+                            EncodedInstruction::Sl(d, s, t)     => {
+                                cpu.issue_imm(d, s, t, Op::Sl);
+                            },
+                            EncodedInstruction::Sr(d, s, t)     => {
+                                cpu.issue_imm(d, s, t, Op::Sr);
+                            },
+                            EncodedInstruction::Sub(d, s, t)    => {
+                                cpu.issue(d, s, t, Op::Sub);
+                            },
+                            EncodedInstruction::Subi(d, s, imm) => {
+                                cpu.issue_imm(d, s, imm, Op::Sub);
+                            },
+                            EncodedInstruction::Sw(addr, val)        => {
+                                if let Some(rob_pos) = cpu.rob.commit_to_store(val) {
+                                    let operand1 = cpu.get_operand(addr);
+                                    let operand2 = cpu.get_operand(val);
+                                    cpu.registers.set_owner(val, rob_pos);
+                                    cpu.lsq.issue(LSQOp::S, pc, rob_pos, operand1, operand2);
                                     cpu.decode_unit.pop_instruction();
                                 }
-                                EncodedInstruction::Halt            => {
-                                    
-                                },
-                                EncodedInstruction::Addi(d, s, imm) => {
-                                    cpu.issue_imm(d, s, imm, Op::Add);
-                                },
-                                EncodedInstruction::Add(d, s, t)    => {
-                                    cpu.issue(d, s, t, Op::Add);
-                                },
-                                EncodedInstruction::And(d, s, t)    => {
-                                    cpu.issue(s, s, t, Op::And);
-                                },
-                                EncodedInstruction::Andi(d, s, imm) => {
-                                    cpu.issue_imm(d, s, imm, Op::And);
-                                },
-                                EncodedInstruction::Beq(s, t, inst) => {
-                                    cpu.issue_branch2(s, t, inst, Op::Beq, pc);
-                                },
-                                EncodedInstruction::Beqz(s, inst) => {
-                                    cpu.issue_branch1(s, inst, Op::Beqz, pc);
-                                }
-                                EncodedInstruction::Blt(s, t, inst) => {
-                                    cpu.issue_branch2(s, t, inst, Op::Blt, pc);
-                                },
-                                EncodedInstruction::Div(d, s, t)    => {
-                                    cpu.issue(d, s, t, Op::Div);
-                                },
-                                EncodedInstruction::J(inst)         => {
-                                    cpu.issue_branch0(inst, Op::J, pc);
-                                },
-                                EncodedInstruction::Ldc(d, imm)     => {
-                                    cpu.issue1_imm(d, imm, Op::Mov);
-                                },
-                                EncodedInstruction::Lw(addr, dest)        => {
-                                    if let Some(rob_pos) = cpu.rob.commit_to(dest) {
-                                        let operand1 = cpu.get_operand(addr);
-                                        cpu.registers.set_owner(dest, rob_pos);
-                                        cpu.lsq.issue(LSQOp::L, pc, rob_pos, operand1, Operand::None);
-                                        cpu.decode_unit.pop_instruction();
-                                    } else {
-                                        println!("NO ROB SPACE");
-                                    }
-                                },
-                                EncodedInstruction::Mod(d, s, t)    => {
-                                    cpu.issue(d, s, t, Op::Mod);
-                                },
-                                EncodedInstruction::Mov(d, s)       => {
-                                    cpu.issue1(d, s, Op::Mov);
-                                },
-                                EncodedInstruction::Mult(d, s, t)   => {
-                                    cpu.issue(d, s, t, Op::Mult);
-                                },
-                                EncodedInstruction::Or(d, s, t)     => {
-                                    cpu.issue(d, s, t, Op::Or);
-                                },
-                                EncodedInstruction::Sl(d, s, t)     => {
-                                    cpu.issue_imm(d, s, t, Op::Sl);
-                                },
-                                EncodedInstruction::Sr(d, s, t)     => {
-                                    cpu.issue_imm(d, s, t, Op::Sr);
-                                },
-                                EncodedInstruction::Sub(d, s, t)    => {
-                                    cpu.issue(d, s, t, Op::Sub);
-                                },
-                                EncodedInstruction::Subi(d, s, imm) => {
-                                    cpu.issue_imm(d, s, imm, Op::Sub);
-                                },
-                                EncodedInstruction::Sw(addr, val)        => {
-                                    if let Some(rob_pos) = cpu.rob.commit_to_store(val) {
-                                        let operand1 = cpu.get_operand(addr);
-                                        let operand2 = cpu.get_operand(val);
-                                        cpu.registers.set_owner(val, rob_pos);
-                                        cpu.lsq.issue(LSQOp::S, pc, rob_pos, operand1, operand2);
-                                        cpu.decode_unit.pop_instruction();
-                                    }
-                                },
-                                EncodedInstruction::Xor(d, s, t)    => {
-                                    cpu.issue(d, s, t, Op::Xor);
-                                },
-                            };
-                        },
-                    };
-                },
-                None => (),
-            };
-            };
-        },
-    };
+                            },
+                            EncodedInstruction::Xor(d, s, t)    => {
+                                cpu.issue(d, s, t, Op::Xor);
+                            },
+                        };
+                    },
+                };
+            },
+            None => (),
+        };
+    }
 
     //now dispatch
     for fu in &mut cpu.exec_unit.func_units {
         for rs in 0..cpu.exec_unit.rs_sts.len() {
-                //try to dipatch to functional unit
-                if cpu.exec_unit.rs_sts[rs].ready {
-                    match cpu.exec_unit.rs_sts[rs].o1 {
-                        Operand::Value(x) => {
-                            match cpu.exec_unit.rs_sts[rs].o2 {
-                                Operand::Value(y) => {
-                                    if fu.dispatch(x, y, cpu.exec_unit.rs_sts[rs].operation, cpu.exec_unit.rs_sts[rs].rob_entry) {
-                                        println!("Dispatching {} = {} {:?} {} from {}", cpu.exec_unit.rs_sts[rs].rob_entry, x, cpu.exec_unit.rs_sts[rs].operation, y, rs );
-                                        cpu.exec_unit.rs_sts[rs].free();
-                                        break; //found a functional unit to execute this RS 
-                                    }
-                                },
-                                Operand::None => {
-                                    if fu.dispatch(x, 0, cpu.exec_unit.rs_sts[rs].operation, cpu.exec_unit.rs_sts[rs].rob_entry) {
-                                        println!("Dispatching {} = {:?} {} from {}", cpu.exec_unit.rs_sts[rs].rob_entry, cpu.exec_unit.rs_sts[rs].operation, x, rs );
-                                        cpu.exec_unit.rs_sts[rs].free();
-                                        break; //found a functional unit to execute this RS 
-                                    }
-                                }
-                                _ => {
-                                    panic!("OPERANDS INCORRECT1");
-                                    //break;
-                                },
-                            };
-                        },
-                        Operand::None => {
-                            match cpu.exec_unit.rs_sts[rs].o2 {
-                                Operand::None => {
-                                    if fu.dispatch(0, 0, cpu.exec_unit.rs_sts[rs].operation, cpu.exec_unit.rs_sts[rs].rob_entry) {
-                                        cpu.exec_unit.rs_sts[rs].free();
-                                        break; //found a functional unit to execute this RS 
-                                    }
-                                },
-                                _ => {
-                                    panic!("OPERANDS INCORRECT2"); 
-                                },
-                            };
-                        },
-                        _ => (),
-                    }; 
-                
+            //try to dipatch to functional unit
+            if let Some((x, y)) = cpu.exec_unit.rs_sts[rs].get_operands() {
+                if fu.dispatch(x, y, cpu.exec_unit.rs_sts[rs].operation, cpu.exec_unit.rs_sts[rs].rob_entry) {
+                    println!("Dispatching {} = {} {:?} {} from {}", cpu.exec_unit.rs_sts[rs].rob_entry, x, cpu.exec_unit.rs_sts[rs].operation, y, rs );
+                    cpu.exec_unit.rs_sts[rs].free();
+                    break; //found a functional unit to execute this RS 
+                }
             }
         }
     }
 
     //Now check the LSQ if something can be executed
-
     if !cpu.exec_unit.mem_unit.busy {
         if let Some(i) = cpu.lsq.get_next_instruction() {
             cpu.exec_unit.mem_unit.dispatch(i);
@@ -622,8 +584,6 @@ impl ExecUnit {
         fus.push(FunctionalUnit::new(FUType::Branch));
         fus.push(FunctionalUnit::new(FUType::Branch));
 
-
-
         let mut rs_sts: Vec<ReservationStation> = Vec::new();
         for _ in 0..NUM_RS {
             rs_sts.push(ReservationStation::new());
@@ -734,7 +694,6 @@ impl LSQ {
     }
 
     fn get_next_instruction(&mut self) -> Option<LSQEntry> {
-        
         match self.lsq.pop_front() {
             Some(instruction) => {
                 self.lsq.push_front(instruction);
@@ -1205,6 +1164,30 @@ impl ReservationStation {
             operation: Op::None,
             busy: false,
             ready: false,
+        }
+    }
+
+    fn get_operands(&self) -> Option<(u32, u32)> {
+        match self.o1 {
+            Operand::Value(x) => {
+                match self.o2 {
+                    Operand::Value(y) => {
+                        Some((x, y))
+                    },
+                    Operand::None => {
+                        Some((x, 0))
+                    },
+                    _ => {
+                        None
+                    }
+                }
+            }
+            Operand::None => {
+                Some((0 , 0))
+            }
+            _ => {
+                None
+            }
         }
     }
 
