@@ -1,7 +1,8 @@
+extern crate clap;
+use clap::{Arg, App, SubCommand};
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::fs::File;
-use std::env;
 use std::collections::LinkedList;
 use std::fmt;
 
@@ -15,14 +16,37 @@ const FETCH_WIDTH: usize = 5;
 const DECODE_WIDTH: usize = 5;
 const COMMIT_WIDTH: usize = 5;
 
-const PREDICTION_TYPE: usize = 1;
-
 fn main() {
-    println!("Hello, world!");
+    let matches = App::new("My Super Program")
+                          .version("1.0")
+                          .author("Richard Boyd rb14427@my.bristol.ac.uk")
+                          .about("Superscalar CPU simulator")
+                          .arg(Arg::with_name("INPUT")
+                               .help("Sets the input file to use")
+                               .required(true)
+                               .index(1))
+                          .arg(Arg::with_name("branch_prediction")
+                               .short("p")
+                               .long("pred-type")
+                               .help("Sets the branch predictor type
+                                      \n1 - Static
+                                      \n2 - 1 bit history
+                                      \n3 - 2 but history
+                                      \n4 - 3 bit history and so on")
+                               .required(false)
+                               .takes_value(true))
+                          .arg(Arg::with_name("v")
+                               .short("v")
+                               .multiple(true)
+                               .help("Sets the level of verbosity"))
+                          .get_matches();
+    
+    let pred_type = matches.value_of("branch_prediction").unwrap_or("0").parse::<usize>().unwrap();
+    println!("PRED TYPE: {}", pred_type);
+    println!("Using input file: {}", matches.value_of("INPUT").unwrap());
 
-    let args: Vec<String> = env::args().collect();
 
-    let file = File::open(&args[1]).unwrap();
+    let file = File::open(matches.value_of("INPUT").unwrap()).unwrap();
 
     let buf = BufReader::new(file);
     let assembly: Vec<String> = buf.lines().map(|l| l.expect("Could not parse line")).collect();
@@ -35,7 +59,7 @@ fn main() {
     //     memory[i] = i as u32;
     // }
 
-    let mut cpu = CPU::new(instructions);
+    let mut cpu = CPU::new(instructions, pred_type);
 
     let mut cycles = 0;
 
@@ -330,14 +354,14 @@ impl fmt::Debug for CPU {
 }
 
 impl CPU {
-    fn new(instructions: Vec<EncodedInstruction>) -> CPU {
+    fn new(instructions: Vec<EncodedInstruction>, pred_type: usize) -> CPU {
         CPU {
             fetch_unit: FetchUnit::new(instructions),
             decode_unit: DecodeUnit::new(),
             exec_unit: ExecUnit::new(),
             registers: Registers::new(),
             rob: ReorderBuffer::new(),
-            branch_predictor: BranchPredictor::new(),
+            branch_predictor: BranchPredictor::new(pred_type),
             lsq: LSQ::new(),
         }
     }
@@ -1299,13 +1323,14 @@ struct BranchPredictor {
     btb: [ (usize, bool) ; MAX_PREDICTIONS],
     total_predictions: u32,
     total_correct: u32,
+    pred_type: usize,
 }
 
 impl BranchPredictor {
-    fn new() -> BranchPredictor {
-        let bht = if PREDICTION_TYPE == 1 {
+    fn new(pred_type: usize) -> BranchPredictor {
+        let bht = if pred_type == 1 {
             [0; MAX_PREDICTIONS]
-        } else if PREDICTION_TYPE == 2 {
+        } else if pred_type == 2 {
             [1; MAX_PREDICTIONS]
         } else {
             [0; MAX_PREDICTIONS]
@@ -1315,6 +1340,7 @@ impl BranchPredictor {
             btb: [ (0, false) ; MAX_PREDICTIONS],
             total_predictions: 0,
             total_correct: 0,
+            pred_type: pred_type
         }
     }
     fn accuracy(&self) -> f32 {
@@ -1324,7 +1350,7 @@ impl BranchPredictor {
     fn predict(&mut self, instruction: EncodedInstruction, pc: usize) -> usize {
         let index = pc & 0b1111111111; //Use least significant 10 bits for index
 
-        if PREDICTION_TYPE == 0 {
+        if self.pred_type == 0 {
             //static prediction
             match instruction {
                 EncodedInstruction::J(address) => {
@@ -1338,7 +1364,7 @@ impl BranchPredictor {
                     pc + 1
                 }
             }
-        } else if PREDICTION_TYPE == 1 || PREDICTION_TYPE == 2 { 
+        } else if self.pred_type == 1 || self.pred_type == 2 { 
             match instruction {
                 EncodedInstruction::J(address) => {
                     self.btb[index] = (address, true);
@@ -1366,10 +1392,10 @@ impl BranchPredictor {
     }
 
     fn make_prediction(&mut self, entry: usize, inst: usize, pc: usize) -> usize {
-        if PREDICTION_TYPE == 0 {
+        if self.pred_type == 0 {
             self.btb[entry] = (pc + 1, false);
             pc + 1
-        } else if PREDICTION_TYPE == 1 {
+        } else if self.pred_type == 1 {
             if self.bht[entry] == 0 {
                 self.btb[entry] = (pc + 1, false);
                 pc + 1
@@ -1377,7 +1403,7 @@ impl BranchPredictor {
                 self.btb[entry] = (inst, true);
                 inst
             }
-        } else if PREDICTION_TYPE == 2 {
+        } else if self.pred_type == 2 {
             if self.bht[entry] <= 1 {
                 self.btb[entry] = (pc + 1, false);
                 pc + 1
@@ -1400,13 +1426,13 @@ impl BranchPredictor {
         let (predicted_pc, branch_taken) = self.btb[entry];
 
         if predicted_pc == taken_pc {
-            if PREDICTION_TYPE == 1 {
+            if self.pred_type == 1 {
                 if branch_taken {
                     self.bht[entry] = 1;
                 } else {
                     self.bht[entry] = 0;
                 }
-            } else if PREDICTION_TYPE == 2 {
+            } else if self.pred_type == 2 {
                 if branch_taken {
                     if !(self.bht[entry] == 3) {
                         self.bht[entry] += 1;
@@ -1421,13 +1447,13 @@ impl BranchPredictor {
             self.total_correct += 1;
             taken_pc
         } else {
-            if PREDICTION_TYPE == 1 {
+            if self.pred_type == 1 {
                 if branch_taken {
                 self.bht[entry] = 0;
                 } else {
                     self.bht[entry] = 1;
                 }
-            } else if PREDICTION_TYPE == 2 {
+            } else if self.pred_type == 2 {
                 if branch_taken {
                     if !(self.bht[entry] == 0) {
                         self.bht[entry] -= 1;
