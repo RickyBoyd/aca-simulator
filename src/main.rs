@@ -72,7 +72,7 @@ fn main() {
 
         println!("CYCLE {}", cycles);
         println!("");
-        println!("CPU: {:?}", cpu);
+        //println!("CPU: {:?}", cpu);
         cycles += 1;
         // for i in memory.iter() {
         //     println!("{}", i);
@@ -1364,7 +1364,7 @@ impl BranchPredictor {
                     pc + 1
                 }
             }
-        } else if self.pred_type == 1 || self.pred_type == 2 { 
+        } else { 
             match instruction {
                 EncodedInstruction::J(address) => {
                     self.btb[index] = (address, true);
@@ -1386,8 +1386,6 @@ impl BranchPredictor {
                     pc + 1
                 }
             }
-        } else {
-            panic!("Oh no");
         }
     }
 
@@ -1395,24 +1393,14 @@ impl BranchPredictor {
         if self.pred_type == 0 {
             self.btb[entry] = (pc + 1, false);
             pc + 1
-        } else if self.pred_type == 1 {
-            if self.bht[entry] == 0 {
-                self.btb[entry] = (pc + 1, false);
-                pc + 1
-            } else {
-                self.btb[entry] = (inst, true);
-                inst
-            }
-        } else if self.pred_type == 2 {
-            if self.bht[entry] <= 1 {
-                self.btb[entry] = (pc + 1, false);
-                pc + 1
-            } else {
-                self.btb[entry] = (inst, true);
-                inst
-            }
         } else {
-            panic!("OH NO");
+            if self.bht[entry] <= ((1 << self.pred_type) - 1) / 2 {
+                self.btb[entry] = (pc + 1, false);
+                pc + 1
+            } else {
+                self.btb[entry] = (inst, true);
+                inst
+            }
         }
     }
 
@@ -1423,18 +1411,12 @@ impl BranchPredictor {
 
         let entry = pc & 0b1111111111;
 
-        let (predicted_pc, branch_taken) = self.btb[entry];
+        let (predicted_pc, predicted_branch_taken) = self.btb[entry];
 
         if predicted_pc == taken_pc {
-            if self.pred_type == 1 {
-                if branch_taken {
-                    self.bht[entry] = 1;
-                } else {
-                    self.bht[entry] = 0;
-                }
-            } else if self.pred_type == 2 {
-                if branch_taken {
-                    if !(self.bht[entry] == 3) {
+            if self.pred_type >= 1 {
+                if predicted_branch_taken {
+                    if !(self.bht[entry] == (1 << self.pred_type) - 1) {
                         self.bht[entry] += 1;
                     }
                 } else {
@@ -1447,19 +1429,13 @@ impl BranchPredictor {
             self.total_correct += 1;
             taken_pc
         } else {
-            if self.pred_type == 1 {
-                if branch_taken {
-                self.bht[entry] = 0;
-                } else {
-                    self.bht[entry] = 1;
-                }
-            } else if self.pred_type == 2 {
-                if branch_taken {
+            if self.pred_type >= 1 {
+                if predicted_branch_taken {
                     if !(self.bht[entry] == 0) {
                         self.bht[entry] -= 1;
                     }
                 } else {
-                    if !(self.bht[entry] == 3) {
+                    if !(self.bht[entry] == (1 << self.pred_type) - 1) {
                         self.bht[entry] += 1;
                     }
                 }
