@@ -1,6 +1,6 @@
 extern crate clap;
 extern crate rand;
-use clap::{Arg, App, SubCommand};
+use clap::{Arg, App};
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::fs::File;
@@ -10,16 +10,14 @@ use rand::Rng;
 
 const ROB_SIZE: usize = 32;
 const MEM_SIZE: usize = 52;
-const NUM_RS: usize = 16;
-const NUM_ALUS: usize = 4;
-const NUM_MULTS: usize = 4;
+const NUM_ALUS: usize = 3;
+const NUM_MULTS: usize = 2;
 const MAX_PREDICTIONS: usize = 1024;
-const FETCH_WIDTH: usize = 5;
-const DECODE_WIDTH: usize = 5;
-const COMMIT_WIDTH: usize = 5;
+const DECODE_WIDTH: usize = 4;
+const COMMIT_WIDTH: usize = 4;
 
 fn main() {
-    let matches = App::new("My Super Program")
+    let matches = App::new("My Simulator")
                           .version("1.0")
                           .author("Richard Boyd rb14427@my.bristol.ac.uk")
                           .about("Superscalar CPU simulator")
@@ -110,6 +108,9 @@ fn main() {
 
     let mut cycles = 0;
     
+     // Vary the output based on how many times the user used the "verbose" flag
+    // (i.e. 'myprog -v -v -v' or 'myprog -vvv' vs 'myprog -v'
+    let verbosity = matches.occurrences_of("v");
 
     loop {
         commit(&mut cpu);
@@ -118,35 +119,40 @@ fn main() {
         decode(&mut cpu);
         fetch(&mut cpu);
 
-        println!("CYCLE {}", cycles);
-        println!("");
-        println!("CPU: {:?}", cpu);
-
         cycles += 1;
-        for i in memory.iter() {
-            println!("{}", i);
+
+        if verbosity >= 1 {
+            println!("Cycle {} Complete", cycles);
+            println!("CPU: {:?}", cpu.registers.gprs);
+            println!("");
         }
-        println!("Registers: {:?}", cpu.registers.gprs);
+        
+        if verbosity >= 2 {
+            
+            for i in memory.iter() {
+                print!("{} ", i);
+            }
+            println!("");
+        }
+        if verbosity >= 3 {
+            println!("CPU: {:?}", cpu);
+        }
 
         if cpu.finished() {
             break;
         }
     }
 
+    for i in 0..52 {
+        print!("{} ", memory[i]);
+    }
+    println!("");
     
     println!("Registers Final Values: {:?}", cpu.registers.gprs);
     println!("Instructions executed: {}", cpu.rob.instructions_committed);
     println!("Number of cycles: {}", cycles);
     println!("Instructions per cycle: {:.2}", (cpu.rob.instructions_committed as f32)  / (cycles as f32));
     println!("Branch prediction accuracy: {:.2}", cpu.branch_predictor.accuracy());
-    
-    for i in 0..30 {
-        println!("{}", memory[i]);
-    }
-    //println!("End: {:?}", regs);
-    //for i in 0..30 {
-    //    println!("MEM[{}]: {}", i, memory[i]);
-    //}
 }
 
 fn fetch(cpu: &mut CPU) {
@@ -221,7 +227,7 @@ fn decode(cpu: &mut CPU) {
                                 cpu.issue(d, s, t, Op::Div);
                             },
                             EncodedInstruction::J(inst)         => {
-                                cpu.issue_branch0(inst, Op::J, pc);
+                                cpu.issue_branch0(inst);
                             },
                             EncodedInstruction::Ldc(d, imm)     => {
                                 cpu.issue1_imm(d, imm, Op::Mov);
@@ -232,8 +238,6 @@ fn decode(cpu: &mut CPU) {
                                     cpu.registers.set_owner(dest, rob_pos);
                                     cpu.lsq.issue(LSQOp::L, pc, rob_pos, operand1, Operand::None);
                                     cpu.decode_unit.pop_instruction();
-                                } else {
-                                    println!("NO ROB SPACE");
                                 }
                             },
                             EncodedInstruction::Mod(d, s, t)    => {
@@ -286,7 +290,7 @@ fn decode(cpu: &mut CPU) {
             //try to dipatch to functional unit
             if let Some((x, y)) = cpu.exec_unit.rs_sts[rs].get_operands() {
                 if fu.dispatch(x, y, cpu.exec_unit.rs_sts[rs].operation, cpu.exec_unit.rs_sts[rs].rob_entry, cpu.exec_unit.rs_sts[rs].address) {
-                    println!("Dispatching {} = {} {:?} {} from {}", cpu.exec_unit.rs_sts[rs].rob_entry, x, cpu.exec_unit.rs_sts[rs].operation, y, rs );
+                    //println!("Dispatching {} = {} {:?} {} from {}", cpu.exec_unit.rs_sts[rs].rob_entry, x, cpu.exec_unit.rs_sts[rs].operation, y, rs );
                     cpu.exec_unit.rs_sts[rs].free();
                     break; //found a functional unit to execute this RS 
                 }
@@ -318,7 +322,7 @@ fn writeback(cpu: &mut CPU) {
                 cpu.rob.insert(rob_entry, result);
 
                 //Resolve dependencies if there is any
-                println!("CDB BROADCASTING: {:?} to ROB {}", result, rob_entry);
+                //println!("CDB BROADCASTING: {:?} to ROB {}", result, rob_entry);
                 match result {
                     ExecResult::Value(x) => {
                         
@@ -353,7 +357,7 @@ fn commit(cpu: &mut CPU) {
     for _ in 0..COMMIT_WIDTH {
         match cpu.rob.get_commit() {
             ReorderBufferResult::Writeback(res, rob, reg) => {
-                println!("Writeback {} {}", res, reg);
+                //println!("Writeback {} {}", res, reg);
                 cpu.registers.write_result(res, rob, reg);
             },
             ReorderBufferResult::BranchTaken(inst, pc) => {
@@ -361,7 +365,7 @@ fn commit(cpu: &mut CPU) {
                 //If not equal then a misprediction occurred
                 let predicted_correct = cpu.branch_predictor.prediction_correct(inst, pc);
                 // IF not correctly predicted
-                println!("Prediction correct: {} {}", predicted_correct, inst);
+                //println!("Prediction correct: {} {}", predicted_correct, inst);
                 if !predicted_correct {
                     //Need to clear RSs, FUs, Instruction Queue
                     cpu.reset();
@@ -377,7 +381,7 @@ fn commit(cpu: &mut CPU) {
                 let taken_pc = pc + 1;
                 let predicted_correct = cpu.branch_predictor.prediction_correct(taken_pc, pc);
                 // IF not correctly predicted
-                println!("Prediction correct: {} {}", predicted_correct, taken_pc);
+                //println!("Prediction correct: {} {}", predicted_correct, taken_pc);
                 if !predicted_correct {
                     //Need to clear RSs, FUs, Instruction Queue
                     cpu.reset();
@@ -468,7 +472,7 @@ impl CPU {
         }
     }
 
-    fn issue_branch0(&mut self, inst: usize, op: Op, pc: usize) {
+    fn issue_branch0(&mut self, inst: usize) {
         self.fetch_unit.speculate(inst);
         self.decode_unit.clear_instructions();
         self.decode_unit.pop_instruction();
@@ -496,9 +500,7 @@ impl CPU {
     }
 
     fn predict(&mut self, inst: EncodedInstruction, pc: usize) {
-        println!("HELLO {:?}, {}", inst, pc);
         let predicted = self.branch_predictor.predict(inst, pc);
-        println!("HELLO PRED {}", predicted);
         if predicted != pc + 1 {
             self.fetch_unit.speculate(predicted);
             self.decode_unit.clear_instructions();
@@ -845,11 +847,6 @@ impl MemoryUnit {
         }
     }
 
-    fn reset(&mut self) {
-        self.cycles = 0;
-        self.result = None;
-    }
-
     fn finished(&self) -> bool {
         if let None = self.result {
             if self.cycles == 0{
@@ -862,7 +859,6 @@ impl MemoryUnit {
     fn dispatch(&mut self, next_instruction: LSQEntry) -> bool {
         if let None = self.result {
             if self.cycles == 0 {
-                println!("Mem dispatch: {:?}", next_instruction);
                 self.instruction = next_instruction;
                 self.result = None;
                 self.cycles = 2;
@@ -921,7 +917,6 @@ enum Op {
     Mult,
     Div,
     Mod,
-    J,
     Beq,
     Beqz,
     Blt,
@@ -1025,9 +1020,6 @@ impl FunctionalUnit {
             },
             FUType::Branch => {
                 match operation {
-                    Op::J => {
-                        true
-                    },
                     Op::Beq => {
                         true
                     },
@@ -1110,9 +1102,6 @@ impl FunctionalUnit {
             },
             FUType::Branch => {
                 match self.operation {
-                    Op::J => {
-                        self.cycles = 1;
-                    },
                     Op::Beq => {
                         self.cycles = 1;
                     },
@@ -1193,9 +1182,6 @@ impl FunctionalUnit {
                     },
                     FUType::Branch => {
                         match self.operation {
-                            Op::J => {
-                                Some((self.rob_entry, ExecResult::BranchTaken(self.addr)))
-                            },
                             Op::Beq => {
                                 if self.op1 == self.op2 {
                                     Some((self.rob_entry, ExecResult::BranchTaken(self.addr)))
@@ -1440,29 +1426,12 @@ impl BranchPredictor {
 
     fn predict(&mut self, instruction: EncodedInstruction, pc: usize) -> usize {
         let index = pc & 0b1111111111; //Use least significant 10 bits for index
-        println!("Predicting with pc {}", pc);
-        println!("HELLO BP {:?}, {}", instruction, pc);
         if self.pred_type == 0 {
             //static prediction
-            match instruction {
-                EncodedInstruction::J(address) => {
-                    self.btb[index] = (address, true);
-                    println!("HELLO taken {:?} {} {}", instruction, address, pc);
-                    address
-                },
-                _ => {
-                    self.btb[index] = (pc + 1, false);
-                    println!("HELLO not taken {:?} {} {} {}", instruction, pc, pc + 1, index);
-                    pc + 1
-                }
-            }
+            self.btb[index] = (pc + 1, false);
+            pc + 1
         } else { 
             match instruction {
-                EncodedInstruction::J(address) => {
-                    self.btb[index] = (address, true);
-                    println!("HELLO taken {:?} {} {}", instruction, address, pc);
-                    address
-                },
                 EncodedInstruction::Beq(_, _, inst) => {
                     self.make_prediction(index, inst, pc)
                 },
@@ -1471,11 +1440,12 @@ impl BranchPredictor {
                 },
                 EncodedInstruction::Blt(_, _, inst) => {
                     self.make_prediction(index, inst, pc)
+                },
+                EncodedInstruction::Bgt(_, _, inst) => {
+                    self.make_prediction(index, inst, pc)
                 }
                 _ => {
-                    self.btb[index] = (pc + 1, false);
-                    println!("HELLO not taken {:?} {} {}", instruction, pc, pc + 1);
-                    pc + 1
+                    panic!("not a brancg instruction");
                 }
             }
         }
@@ -1483,7 +1453,6 @@ impl BranchPredictor {
 
     fn make_prediction(&mut self, entry: usize, inst: usize, pc: usize) -> usize {
         if self.pred_type == 0 {
-            println!("HELLO not taken {} {}", pc, entry);
             self.btb[entry] = (pc + 1, false);
             pc + 1
         } else {
@@ -1499,14 +1468,11 @@ impl BranchPredictor {
 
     fn prediction_correct(&mut self, taken_pc: usize, pc: usize) -> bool {
         //TODO Need to remove from table also
-        println!("RESOLVING PREDICTION. {} ", pc);
         self.total_predictions += 1;
 
         let entry = pc & 0b1111111111;
 
         let (predicted_pc, predicted_branch_taken) = self.btb[entry];
-
-        println!("HELLO resolving {} {} {} {}", taken_pc, predicted_pc, pc, entry);
 
         if predicted_pc == taken_pc {
             if self.pred_type >= 1 {
@@ -1520,7 +1486,6 @@ impl BranchPredictor {
                     }
                 }
             }
-            println!("BRANCH CORRECTLY PREDICTED {} {} {}", predicted_pc, taken_pc, pc);
             self.total_correct += 1;
             true
         } else {
@@ -1535,7 +1500,6 @@ impl BranchPredictor {
                     }
                 }
             }
-            println!("BRANCH MISPREDICTED! {} {} {}", predicted_pc, taken_pc, pc);
             false
         }
     }
