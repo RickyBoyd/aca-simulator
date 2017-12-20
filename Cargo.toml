@@ -5,3 +5,4 @@ authors = ["Ricky Boyd <ricky_boyd@hotmail.co.uk>"]
 
 [dependencies]
 clap = "*"
+rand = "*"

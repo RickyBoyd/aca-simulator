@@ -1,10 +1,12 @@
 extern crate clap;
+extern crate rand;
 use clap::{Arg, App, SubCommand};
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::fs::File;
 use std::collections::LinkedList;
 use std::fmt;
+use rand::Rng;
 
 const ROB_SIZE: usize = 32;
 const MEM_SIZE: usize = 52;
@@ -29,10 +31,20 @@ fn main() {
                                .short("p")
                                .long("pred-type")
                                .help("Sets the branch predictor type
-                                      \n1 - Static
-                                      \n2 - 1 bit history
-                                      \n3 - 2 but history
-                                      \n4 - 3 bit history and so on")
+                                      \n0 - Static
+                                      \n1 - 1 bit history
+                                      \n2 - 2 but history
+                                      \n3 - 3 bit history and so on")
+                               .required(false)
+                               .takes_value(true))
+                           .arg(Arg::with_name("memory")
+                               .short("m")
+                               .long("mem")
+                               .help("Sets the memory
+                                      \n0 - Zeroes
+                                      \n1 - Sorted 
+                                      \n2 - Sorted reverse
+                                      \n3 - Random")
                                .required(false)
                                .takes_value(true))
                           .arg(Arg::with_name("v")
@@ -42,7 +54,7 @@ fn main() {
                           .get_matches();
     
     let pred_type = matches.value_of("branch_prediction").unwrap_or("0").parse::<usize>().unwrap();
-    println!("PRED TYPE: {}", pred_type);
+    println!("Prediction histroy size: {}", pred_type);
     println!("Using input file: {}", matches.value_of("INPUT").unwrap());
 
 
@@ -55,9 +67,29 @@ fn main() {
 
     let mut memory: [u32; MEM_SIZE] = [0; MEM_SIZE];
 
-    for i in 0..MEM_SIZE {
-        memory[i] = i as u32;
-    }
+    let m_type = matches.value_of("memory").unwrap_or("0").parse::<u32>().unwrap();
+
+    match m_type {
+        0 => (),
+        1 => {
+            for i in 0..MEM_SIZE {
+                memory[i] = i as u32;
+            }
+        },
+        2 => {
+            for i in 0..MEM_SIZE {
+                memory[i] = (MEM_SIZE - i) as u32;
+            }
+        },
+        3 => {
+            for i in 0..MEM_SIZE {
+                memory[i] = rand::thread_rng().gen_range(0, 100);
+            }
+        },
+        _ => {
+            panic!("Unaccepted memory configuration {}", m_type);
+        }
+    };
 
     let mut cpu = CPU::new(instructions, pred_type);
 
