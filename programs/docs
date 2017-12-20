@@ -1,0 +1,32 @@
+SW addr value // store 
+LW addr value  // load
+
+BGT reg1 reg2 branch_to // Branch if reg1 > reg2
+                        // branch_to branches to the (branch_to + 1)th line of code
+
+BLT reg1 reg2 branch_to // branch if reg1 < reg2
+
+BEQ reg1 reg2 branch_to //branch if reg1 == reg2
+
+BEQZ reg branch_to      // branch of reg is 0
+
+J address               // jump to instruction address ( jumps to the (branch_to + 1)th line of code )
+
+//Arithmetic instructions
+
+ADD dest reg1 reg2
+ADDI dest reg imm
+AND dest reg1 reg2
+ANDI dest reg1 imm
+DIV dest reg1 reg2
+MOD dest reg1 reg2
+MULT dest reg1 reg2
+OR dest reg1 reg2
+SL dest reg imm      //shift left
+SR dest reg imm      //shift right
+SUB dest reg1 reg2
+SUBI dest reg1 imm
+XOR dest reg1 reg2
+
+LDC dest const          // Load a constant
+MOV dest source         // move the value in source to register dest
