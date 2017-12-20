@@ -47,6 +47,12 @@ fn main() {
                                       \n3 - Random")
                                .required(false)
                                .takes_value(true))
+                           .arg(Arg::with_name("fetchwidth")
+                               .short("f")
+                               .long("fw")
+                               .help("Sets the number of instructions fetched per cycle")
+                               .required(false)
+                               .takes_value(true))
                           .arg(Arg::with_name("v")
                                .short("v")
                                .multiple(true)
@@ -91,9 +97,12 @@ fn main() {
         }
     };
 
-    let mut cpu = CPU::new(instructions, pred_type);
+    let f_width = matches.value_of("fetchwidth").unwrap_or("4").parse::<usize>().unwrap();
+
+    let mut cpu = CPU::new(instructions, pred_type, f_width);
 
     let mut cycles = 0;
+    
 
     loop {
         commit(&mut cpu);
@@ -140,7 +149,7 @@ fn fetch(cpu: &mut CPU) {
             cpu.fetch_unit.reset = false;
         },
         false => {
-            for _ in 0..FETCH_WIDTH {
+            for _ in 0..cpu.fetch_unit.width {
                 let inst = cpu.fetch_unit.get_instruction();
                 match inst {
                     EncodedInstruction::Halt => (),
@@ -396,9 +405,9 @@ impl fmt::Debug for CPU {
 }
 
 impl CPU {
-    fn new(instructions: Vec<EncodedInstruction>, pred_type: usize) -> CPU {
+    fn new(instructions: Vec<EncodedInstruction>, pred_type: usize, fetch_width: usize) -> CPU {
         CPU {
-            fetch_unit: FetchUnit::new(instructions),
+            fetch_unit: FetchUnit::new(instructions, fetch_width),
             decode_unit: DecodeUnit::new(),
             exec_unit: ExecUnit::new(),
             registers: Registers::new(),
@@ -539,6 +548,7 @@ impl CPU {
 
 #[derive(Debug)]
 struct FetchUnit {
+    width: usize,
     pc: usize,
     exec_pc: Option<usize>,
     instructions: Vec<EncodedInstruction>,
@@ -547,8 +557,9 @@ struct FetchUnit {
 }
 
 impl FetchUnit {
-    fn new(encoded_instructions: Vec<EncodedInstruction>) -> FetchUnit {
+    fn new(encoded_instructions: Vec<EncodedInstruction>, width: usize) -> FetchUnit {
         FetchUnit {
+            width: width,
             pc: 0,
             exec_pc: None,
             instructions: encoded_instructions,
