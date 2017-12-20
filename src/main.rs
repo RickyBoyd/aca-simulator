@@ -53,11 +53,11 @@ fn main() {
 
     let instructions = assemble(assembly);
 
-    let mut memory: [u32; MEM_SIZE] = [1; MEM_SIZE];
+    let mut memory: [u32; MEM_SIZE] = [0; MEM_SIZE];
 
-    // for i in 0..MEM_SIZE {
-    //     memory[i] = i as u32;
-    // }
+    for i in 0..MEM_SIZE {
+        memory[i] = (MEM_SIZE - i) as u32;
+    }
 
     let mut cpu = CPU::new(instructions, pred_type);
 
@@ -72,11 +72,14 @@ fn main() {
 
         println!("CYCLE {}", cycles);
         println!("");
-        //println!("CPU: {:?}", cpu);
+        println!("CPU: {:?}", cpu);
+
         cycles += 1;
-        // for i in memory.iter() {
-        //     println!("{}", i);
-        // }
+        for i in memory.iter() {
+            println!("{}", i);
+        }
+        println!("Registers: {:?}", cpu.registers.gprs);
+
         if cpu.finished() {
             break;
         }
@@ -89,7 +92,7 @@ fn main() {
     println!("Instructions per cycle: {:.2}", (cpu.rob.instructions_committed as f32)  / (cycles as f32));
     println!("Branch prediction accuracy: {:.2}", cpu.branch_predictor.accuracy());
     
-    for i in 0..30{
+    for i in 0..30 {
         println!("{}", memory[i]);
     }
     //println!("End: {:?}", regs);
@@ -159,6 +162,9 @@ fn decode(cpu: &mut CPU) {
                             }
                             EncodedInstruction::Blt(s, t, inst) => {
                                 cpu.issue_branch2(s, t, inst, Op::Blt, pc);
+                            },
+                            EncodedInstruction::Bgt(s, t, inst) => {
+                                cpu.issue_branch2(s, t, inst, Op::Bgt, pc);
                             },
                             EncodedInstruction::Div(d, s, t)    => {
                                 cpu.issue(d, s, t, Op::Div);
@@ -296,15 +302,16 @@ fn commit(cpu: &mut CPU) {
     for _ in 0..COMMIT_WIDTH {
         match cpu.rob.get_commit() {
             ReorderBufferResult::Writeback(res, rob, reg) => {
+                println!("Writeback {} {}", res, reg);
                 cpu.registers.write_result(res, rob, reg);
             },
             ReorderBufferResult::BranchTaken(inst, pc) => {
                 //ROB also beign used to store predicted PC for branches
                 //If not equal then a misprediction occurred
-                let predicted_pc = cpu.branch_predictor.prediction(inst, pc);
+                let predicted_correct = cpu.branch_predictor.prediction_correct(inst, pc);
                 // IF not correctly predicted
-                println!("Prediction correct: {}", predicted_pc == inst);
-                if predicted_pc != inst {
+                println!("Prediction correct: {} {}", predicted_correct, inst);
+                if !predicted_correct {
                     //Need to clear RSs, FUs, Instruction Queue
                     cpu.reset();
                     //Also need to set the PC correctly
@@ -317,10 +324,10 @@ fn commit(cpu: &mut CPU) {
                 //ROB also beign used to store predicted PC for branches
                 //If not equal then a misprediction occurred
                 let taken_pc = pc + 1;
-                let predicted_pc = cpu.branch_predictor.prediction(taken_pc, pc);
+                let predicted_correct = cpu.branch_predictor.prediction_correct(taken_pc, pc);
                 // IF not correctly predicted
-                println!("Prediction correct: {}", predicted_pc == taken_pc);
-                if taken_pc != predicted_pc {
+                println!("Prediction correct: {} {}", predicted_correct, taken_pc);
+                if !predicted_correct {
                     //Need to clear RSs, FUs, Instruction Queue
                     cpu.reset();
                     //Also need to set the PC correctly
@@ -621,7 +628,6 @@ impl ExecUnit {
         for fu in &mut self.func_units {
             fu.reset();
         }
-        self.mem_unit.reset();
     }
 
     fn finished(&self) -> bool {
@@ -692,7 +698,13 @@ impl LSQ {
     }
 
     fn clear(&mut self) {
-        self.lsq.clear();
+        
+        while let Some(back) = self.lsq.pop_back() {
+            if back.committed == true {
+                self.lsq.push_back(back);
+                break;
+            }
+        }
     }
 
     fn issue(&mut self, op: LSQOp, pc: usize, rob_entry: usize, addr: Operand, value: Operand) {
@@ -789,7 +801,7 @@ impl MemoryUnit {
                 println!("Mem dispatch: {:?}", next_instruction);
                 self.instruction = next_instruction;
                 self.result = None;
-                self.cycles = 3;
+                self.cycles = 2;
                 true
             } else { false }
         } else { false }
@@ -849,6 +861,7 @@ enum Op {
     Beq,
     Beqz,
     Blt,
+    Bgt,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -953,11 +966,14 @@ impl FunctionalUnit {
                     },
                     Op::Beq => {
                         true
-                    }
+                    },
                     Op::Beqz => {
                         true
-                    }
+                    },
                     Op::Blt => {
+                        true
+                    },
+                    Op::Bgt => {
                         true
                     }
                     _ => false,
@@ -1035,11 +1051,14 @@ impl FunctionalUnit {
                     },
                     Op::Beq => {
                         self.cycles = 1;
-                    }
+                    },
                     Op::Beqz => {
                         self.cycles = 1;
-                    }
+                    },
                     Op::Blt => {
+                        self.cycles = 1;
+                    },
+                    Op::Bgt => {
                         self.cycles = 1;
                     }
                     _ => (),
@@ -1128,7 +1147,7 @@ impl FunctionalUnit {
                                     Some((self.rob_entry, ExecResult::BranchNotTaken())) 
                                 }
                                 
-                            }
+                            },
                             Op::Blt => {
                                 if self.op1 < self.op2 {
                                     Some((self.rob_entry, ExecResult::BranchTaken(self.addr)))
@@ -1136,7 +1155,15 @@ impl FunctionalUnit {
                                     Some((self.rob_entry, ExecResult::BranchNotTaken()))
                                 }
                                 
-                            }
+                            },
+                            Op::Bgt => {
+                                if self.op1 > self.op2 {
+                                    Some((self.rob_entry, ExecResult::BranchTaken(self.addr)))
+                                } else {
+                                    Some((self.rob_entry, ExecResult::BranchNotTaken()))
+                                }
+                                
+                            },
                             _ => {
                                panic!("Not a BRANCH operation {:?}", self.operation); 
                             }
@@ -1404,7 +1431,7 @@ impl BranchPredictor {
         }
     }
 
-    fn prediction(&mut self, taken_pc: usize, pc: usize) -> usize {
+    fn prediction_correct(&mut self, taken_pc: usize, pc: usize) -> bool {
         //TODO Need to remove from table also
         println!("RESOLVING PREDICTION. {} ", pc);
         self.total_predictions += 1;
@@ -1427,7 +1454,7 @@ impl BranchPredictor {
             }
             println!("BRANCH CORRECTLY PREDICTED {} {} {}", predicted_pc, taken_pc, pc);
             self.total_correct += 1;
-            taken_pc
+            true
         } else {
             if self.pred_type >= 1 {
                 if predicted_branch_taken {
@@ -1441,7 +1468,7 @@ impl BranchPredictor {
                 }
             }
             println!("BRANCH MISPREDICTED! {} {} {}", predicted_pc, taken_pc, pc);
-            pc + 1
+            false
         }
     }
 }
@@ -1616,6 +1643,7 @@ enum EncodedInstruction {
     Andi(usize, usize, u32),
     Beq(usize, usize, usize),
     Beqz(usize, usize),
+    Bgt(usize, usize, usize),
     Blt(usize, usize, usize),
     Div(usize, usize, usize),
     J(usize),
@@ -1662,6 +1690,10 @@ fn assemble(assembly: Vec<String>) -> Vec<EncodedInstruction> {
             "BEQZ" => {
                 let (s, addr) = two_args(split_inst);
                 instructions.push(EncodedInstruction::Beqz(s, addr));
+            }
+            "BGT" => {
+                let (s, t, addr) = three_args(split_inst);
+                instructions.push(EncodedInstruction::Bgt(s, t, addr));
             }
             "BLT" => {
                 let (s, t, addr) = three_args(split_inst);
