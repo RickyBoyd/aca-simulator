@@ -56,7 +56,7 @@ fn main() {
     let mut memory: [u32; MEM_SIZE] = [0; MEM_SIZE];
 
     for i in 0..MEM_SIZE {
-        memory[i] = (MEM_SIZE - i) as u32;
+        memory[i] = i as u32;
     }
 
     let mut cpu = CPU::new(instructions, pred_type);
@@ -114,7 +114,7 @@ fn fetch(cpu: &mut CPU) {
                     EncodedInstruction::Halt => (),
                     _ => {
                         cpu.decode_unit.add_instruction(inst, cpu.fetch_unit.pc);
-                        cpu.fetch_unit.pc = cpu.branch_predictor.predict(inst, cpu.fetch_unit.pc);
+                        cpu.fetch_unit.pc += 1;
                     }
                 }
             }
@@ -123,7 +123,6 @@ fn fetch(cpu: &mut CPU) {
 }
 
 fn decode(cpu: &mut CPU) {
-
     for _ in 0..DECODE_WIDTH {
         let possible_instruction = cpu.decode_unit.get_next_instruction();
         match possible_instruction {
@@ -156,14 +155,18 @@ fn decode(cpu: &mut CPU) {
                             },
                             EncodedInstruction::Beq(s, t, inst) => {
                                 cpu.issue_branch2(s, t, inst, Op::Beq, pc);
+                                cpu.predict(instruction, pc);
                             },
                             EncodedInstruction::Beqz(s, inst) => {
+                                cpu.predict(instruction, pc);
                                 cpu.issue_branch1(s, inst, Op::Beqz, pc);
                             }
                             EncodedInstruction::Blt(s, t, inst) => {
+                                cpu.predict(instruction, pc);
                                 cpu.issue_branch2(s, t, inst, Op::Blt, pc);
                             },
                             EncodedInstruction::Bgt(s, t, inst) => {
+                                cpu.predict(instruction, pc);
                                 cpu.issue_branch2(s, t, inst, Op::Bgt, pc);
                             },
                             EncodedInstruction::Div(d, s, t)    => {
@@ -418,12 +421,9 @@ impl CPU {
     }
 
     fn issue_branch0(&mut self, inst: usize, op: Op, pc: usize) {
-        if let Some(r) = self.exec_unit.get_free_rs() {
-            if let Some(rob_pos) = self.rob.commit_to(pc) {
-                self.exec_unit.issue_branch(Operand::None, Operand::None, op, r, rob_pos, inst);
-                self.decode_unit.pop_instruction();
-            }
-        }
+        self.fetch_unit.speculate(inst);
+        self.decode_unit.clear_instructions();
+        self.decode_unit.pop_instruction();
     }
 
     fn issue_branch1(&mut self, s: usize, inst: usize, op: Op, pc: usize) {
@@ -432,7 +432,7 @@ impl CPU {
                 let operand1 = self.get_operand(s);
                 self.exec_unit.issue_branch(operand1, Operand::None, op, r, rob_pos, inst);
                 self.decode_unit.pop_instruction();
-            }
+             }
         }
     }
 
@@ -443,8 +443,17 @@ impl CPU {
                 let operand2 = self.get_operand(t);
                 self.exec_unit.issue_branch(operand1, operand2, op, r, rob_pos, inst);
                 self.decode_unit.pop_instruction();
-                
             }
+        }
+    }
+
+    fn predict(&mut self, inst: EncodedInstruction, pc: usize) {
+        println!("HELLO {:?}, {}", inst, pc);
+        let predicted = self.branch_predictor.predict(inst, pc);
+        println!("HELLO PRED {}", predicted);
+        if predicted != pc + 1 {
+            self.fetch_unit.speculate(predicted);
+            self.decode_unit.clear_instructions();
         }
     }
 
@@ -522,6 +531,11 @@ impl FetchUnit {
         } else {
             true
         }
+    }
+
+    fn speculate(&mut self, pc: usize) {
+        self.reset = true;
+        self.pc = pc;
     }
 
     fn mispredict(&mut self, new_pc: usize) {
@@ -1376,18 +1390,19 @@ impl BranchPredictor {
 
     fn predict(&mut self, instruction: EncodedInstruction, pc: usize) -> usize {
         let index = pc & 0b1111111111; //Use least significant 10 bits for index
-
+        println!("Predicting with pc {}", pc);
+        println!("HELLO BP {:?}, {}", instruction, pc);
         if self.pred_type == 0 {
             //static prediction
             match instruction {
                 EncodedInstruction::J(address) => {
                     self.btb[index] = (address, true);
-                    println!("Predict taken {:?} {} {}", instruction, address, pc);
+                    println!("HELLO taken {:?} {} {}", instruction, address, pc);
                     address
                 },
                 _ => {
                     self.btb[index] = (pc + 1, false);
-                    println!("Predict not taken {:?} {} {}", instruction, pc, pc + 1);
+                    println!("HELLO not taken {:?} {} {} {}", instruction, pc, pc + 1, index);
                     pc + 1
                 }
             }
@@ -1395,7 +1410,7 @@ impl BranchPredictor {
             match instruction {
                 EncodedInstruction::J(address) => {
                     self.btb[index] = (address, true);
-                    println!("Predict taken {:?} {} {}", instruction, address, pc);
+                    println!("HELLO taken {:?} {} {}", instruction, address, pc);
                     address
                 },
                 EncodedInstruction::Beq(_, _, inst) => {
@@ -1409,7 +1424,7 @@ impl BranchPredictor {
                 }
                 _ => {
                     self.btb[index] = (pc + 1, false);
-                    println!("Predict not taken {:?} {} {}", instruction, pc, pc + 1);
+                    println!("HELLO not taken {:?} {} {}", instruction, pc, pc + 1);
                     pc + 1
                 }
             }
@@ -1418,6 +1433,7 @@ impl BranchPredictor {
 
     fn make_prediction(&mut self, entry: usize, inst: usize, pc: usize) -> usize {
         if self.pred_type == 0 {
+            println!("HELLO not taken {} {}", pc, entry);
             self.btb[entry] = (pc + 1, false);
             pc + 1
         } else {
@@ -1439,6 +1455,8 @@ impl BranchPredictor {
         let entry = pc & 0b1111111111;
 
         let (predicted_pc, predicted_branch_taken) = self.btb[entry];
+
+        println!("HELLO resolving {} {} {} {}", taken_pc, predicted_pc, pc, entry);
 
         if predicted_pc == taken_pc {
             if self.pred_type >= 1 {
