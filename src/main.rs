@@ -53,6 +53,12 @@ fn main() {
                                .help("Sets the number of instructions fetched per cycle")
                                .required(false)
                                .takes_value(true))
+                           .arg(Arg::with_name("numrs")
+                               .short("r")
+                               .long("reservations")
+                               .help("Sets the number of reservation stations")
+                               .required(false)
+                               .takes_value(true))
                           .arg(Arg::with_name("v")
                                .short("v")
                                .multiple(true)
@@ -98,8 +104,9 @@ fn main() {
     };
 
     let f_width = matches.value_of("fetchwidth").unwrap_or("4").parse::<usize>().unwrap();
+    let numrs = matches.value_of("numrs").unwrap_or("32").parse::<usize>().unwrap();
 
-    let mut cpu = CPU::new(instructions, pred_type, f_width);
+    let mut cpu = CPU::new(instructions, pred_type, f_width, numrs);
 
     let mut cycles = 0;
     
@@ -405,11 +412,11 @@ impl fmt::Debug for CPU {
 }
 
 impl CPU {
-    fn new(instructions: Vec<EncodedInstruction>, pred_type: usize, fetch_width: usize) -> CPU {
+    fn new(instructions: Vec<EncodedInstruction>, pred_type: usize, fetch_width: usize, num_rs: usize) -> CPU {
         CPU {
             fetch_unit: FetchUnit::new(instructions, fetch_width),
             decode_unit: DecodeUnit::new(),
-            exec_unit: ExecUnit::new(),
+            exec_unit: ExecUnit::new(num_rs),
             registers: Registers::new(),
             rob: ReorderBuffer::new(),
             branch_predictor: BranchPredictor::new(pred_type),
@@ -652,7 +659,7 @@ impl fmt::Debug for ExecUnit {
 }
 
 impl ExecUnit {
-    fn new() -> ExecUnit {
+    fn new(num_rs: usize) -> ExecUnit {
         let mut fus: Vec<FunctionalUnit> = Vec::new();
 
         //ALUs
@@ -668,7 +675,7 @@ impl ExecUnit {
         
 
         let mut rs_sts: Vec<ReservationStation> = Vec::new();
-        for _ in 0..NUM_RS {
+        for _ in 0..num_rs {
             rs_sts.push(ReservationStation::new());
         }
         ExecUnit {
